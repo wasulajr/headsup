@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent template for the iterm-watchdog. Installed by setup.sh,
+  which expands the home-dir placeholder to the current user's $HOME
+  and writes the result to:
+    ~/Library/LaunchAgents/claude-code.iterm-watchdog.plist
+
+  Outermost safety net for the iterm hook stack: runs every 30s,
+  independent of Claude Code. On the no-op path (daemon healthy) it just
+  does a few file stats and exits. When the daemon is dead/missing it
+  respawns it and fires Tier 2 per-session as defense-in-depth.
+
+  See iterm-config/hooks/iterm-watchdog.sh for the script.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>claude-code.iterm-watchdog</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__HOME__/.claude/hooks/iterm-watchdog.sh</string>
+    </array>
+
+    <!-- Run every 30s. Cheap no-op when the daemon is healthy. -->
+    <key>StartInterval</key>
+    <integer>30</integer>
+
+    <!-- Run once at load so we don't have to wait the first 30s. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Don't restart on crash — watchdog is stateless and StartInterval
+         fires it again in 30s anyway. -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Log into the same .state dir as the rest of the hook stack. -->
+    <key>StandardOutPath</key>
+    <string>__HOME__/.claude/hooks/.state/watchdog.stdout</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.claude/hooks/.state/watchdog.stderr</string>
+
+    <!-- Let any nohup'd children (daemon respawn, Tier 2 oneshots) outlive
+         this invocation. -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+</dict>
+</plist>

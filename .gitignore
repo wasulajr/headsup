@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+*.bak
+*.log
+hooks/iterm2-venv/
