@@ -5,7 +5,9 @@ description: Manage the macOS notification that fires when a Claude Code tab has
 
 # iTerm waiting-notifications
 
-The launchd watchdog (`claude-code.iterm-watchdog`) runs every 30 seconds. When it finds a tab whose state file has been orange (waiting) for longer than `THRESHOLD_MIN` minutes, it fires a macOS notification via `osascript`. This skill is the user-friendly way to toggle the feature, change the threshold, change the sound, or test that it works.
+The launchd watchdog (`claude-code.iterm-watchdog`) runs every 30 seconds. When it finds a tab whose state file has been orange (waiting) for longer than `THRESHOLD_MIN` minutes, it fires a macOS notification. This skill is the user-friendly way to toggle the feature, change the threshold, change the sound, or test that it works.
+
+The notifier prefers `terminal-notifier` (Homebrew) so it can render the **Claude icon** in the notification. If terminal-notifier isn't installed it falls back to `osascript`, which always shows the Script Editor icon. Either way the notification body is identical — only the icon differs.
 
 ## Usage forms
 
@@ -33,17 +35,22 @@ If the user just said "turn on notifications" or "enable", pass `on`. "Turn them
 
 After the helper prints the new state, **don't add a long explanation** — the output is clear enough. One short confirmation sentence if the change is non-obvious (e.g., "Notifications will now fire after 10 minutes of waiting").
 
-## First-run macOS permissions caveat
+## First-run macOS permissions
 
-The notifications come from `osascript`, which macOS attributes to **Script Editor**. The first time, the user may need to:
+Notifications need OS-level permission per app:
 
-1. Run `/iterm-notifications test`
-2. macOS will prompt to allow notifications from "Script Editor"
-3. Click Allow
+- **With terminal-notifier** (`brew install terminal-notifier`): the first test will trigger a permission prompt for `terminal-notifier`. Allow it.
+- **Fallback path (osascript)**: macOS attributes the notification to `Script Editor`. First test triggers a permission prompt for that.
 
-If notifications don't appear after the first test: System Settings → Notifications → Script Editor → ensure "Allow Notifications" is on.
+If notifications don't appear after the first test: System Settings → Notifications → find the relevant app (terminal-notifier or Script Editor) → ensure "Allow Notifications" is on.
 
-(Better attribution would require installing `terminal-notifier` and switching the helper to use it. Not done by default to keep the install dep-free.)
+To upgrade from the fallback icon to the Claude icon:
+
+```bash
+brew install terminal-notifier
+```
+
+The notifier auto-detects it on the next sweep — no config change needed.
 
 ## How the threshold actually applies
 

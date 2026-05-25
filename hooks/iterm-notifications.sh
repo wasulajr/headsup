@@ -75,13 +75,28 @@ show_state() {
     printf '  %sconfig:   %s%s\n' "$DIM" "$RST" "$CONFIG"
 }
 
+resolve_claude_icon() {
+    local app="/Applications/Claude.app"
+    [ -d "$app" ] || return 0
+    local icon_name
+    icon_name=$(defaults read "$app/Contents/Info" CFBundleIconFile 2>/dev/null | tr -d '"')
+    [ -z "$icon_name" ] && return 0
+    local path="$app/Contents/Resources/$icon_name"
+    [ -f "$path" ] && { printf '%s' "$path"; return 0; }
+    path="$app/Contents/Resources/${icon_name}.icns"
+    [ -f "$path" ] && { printf '%s' "$path"; return 0; }
+    return 0
+}
+
 fire_test() {
-    # Mirror the live notifier's title/subtitle/body layout so the test
-    # accurately previews what real notifications will look like. Use
-    # the current tab's badge (or "test" as a placeholder) for the title.
+    # Mirror the live notifier's title/subtitle/body layout AND its choice
+    # of notification backend (terminal-notifier preferred, osascript
+    # fallback) so the test accurately previews what real notifications
+    # look like.
     local label="test"
+    local uuid="default"
     if [ -n "${ITERM_SESSION_ID:-}" ]; then
-        local uuid="${ITERM_SESSION_ID#*:}"
+        uuid="${ITERM_SESSION_ID#*:}"
         local bf="$HOME/.claude/hooks/.state/${uuid}.badge"
         if [ -f "$bf" ]; then
             local b
@@ -89,13 +104,34 @@ fire_test() {
             [ -n "$b" ] && label="$b"
         fi
     fi
-    local script="display notification \"This is a test (no real waiting tab).\" with title \"$label\" subtitle \"Claude is waiting\""
-    if [ -n "$NOTIFICATION_SOUND" ]; then
-        script="$script sound name \"$NOTIFICATION_SOUND\""
+    local body="This is a test (no real waiting tab)."
+
+    if command -v terminal-notifier >/dev/null 2>&1; then
+        local args=(-title "$label" -subtitle "Claude is waiting" -message "$body")
+        [ -n "$NOTIFICATION_SOUND" ] && args+=(-sound "$NOTIFICATION_SOUND")
+        local icon
+        icon=$(resolve_claude_icon)
+        [ -n "$icon" ] && args+=(-appIcon "$icon")
+        args+=(-group "iterm-notify-test-$uuid")
+        if terminal-notifier "${args[@]}" >/dev/null 2>&1; then
+            printf '  %s✓%s test notification fired via terminal-notifier' "$G" "$RST"
+            [ -n "$icon" ] && printf ' (Claude icon)'
+            printf '\n'
+        else
+            printf '  %s✗%s terminal-notifier failed; check macOS Notifications permissions\n' "$Y" "$RST"
+        fi
+        return
     fi
-    osascript -e "$script" 2>/dev/null && \
-        printf '  %s✓%s test notification fired (check Notification Center)\n' "$G" "$RST" || \
-        printf '  %s✗%s osascript failed — macOS may be blocking Script Editor notifications. Check System Settings → Notifications → Script Editor.\n' "$Y" "$RST"
+
+    # Fallback: osascript (Script Editor icon, no -appIcon support).
+    local script="display notification \"$body\" with title \"$label\" subtitle \"Claude is waiting\""
+    [ -n "$NOTIFICATION_SOUND" ] && script="$script sound name \"$NOTIFICATION_SOUND\""
+    if osascript -e "$script" 2>/dev/null; then
+        printf '  %s✓%s test notification fired via osascript (Script Editor icon)\n' "$G" "$RST"
+        printf '  %s  install terminal-notifier for the Claude icon:%s brew install terminal-notifier\n' "$DIM" "$RST"
+    else
+        printf '  %s✗%s osascript failed — System Settings → Notifications → Script Editor → Allow\n' "$Y" "$RST"
+    fi
 }
 
 # ── Arg parsing ───────────────────────────────────────────────────────────

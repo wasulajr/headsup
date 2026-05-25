@@ -52,14 +52,49 @@ log_msg() {
     printf '%s notifier %s\n' "$(date -u '+%FT%T.%3NZ' 2>/dev/null || date -u '+%FT%TZ')" "$1" >> "$LOG_FILE" 2>/dev/null || true
 }
 
-# Fire a macOS notification via osascript. First time per user, macOS
-# will prompt them to allow notifications from "Script Editor"; after
-# that it's silent. macOS displays the three slots as:
+# Resolve the Claude Desktop icon path (best-effort) so terminal-notifier
+# can render the notification with the Claude logo. Anthropic's installer
+# overwrites the default Electron icon file (electron.icns) with the
+# actual Claude logo, so the literal path is what we want.
+resolve_claude_icon() {
+    local app="/Applications/Claude.app"
+    [ -d "$app" ] || return 0
+    local icon_name
+    icon_name=$(defaults read "$app/Contents/Info" CFBundleIconFile 2>/dev/null | tr -d '"')
+    [ -z "$icon_name" ] && return 0
+    local path="$app/Contents/Resources/$icon_name"
+    [ -f "$path" ] && { printf '%s' "$path"; return 0; }
+    path="$app/Contents/Resources/${icon_name}.icns"
+    [ -f "$path" ] && { printf '%s' "$path"; return 0; }
+    return 0
+}
+
+# Fire a macOS notification. Prefers `terminal-notifier` (brew) so we can
+# render the Claude icon via -appIcon. Falls back to osascript (which
+# always renders as "Script Editor") when terminal-notifier isn't
+# installed.
+#
+# macOS displays the three slots as:
 #   title    — bold first line (the most prominent piece)
 #   subtitle — smaller bold second line
 #   body     — regular text third line
 fire_notification() {
-    local title="$1" subtitle="$2" body="$3"
+    local title="$1" subtitle="$2" body="$3" group_id="${4:-default}"
+    if command -v terminal-notifier >/dev/null 2>&1; then
+        local args=(-title "$title" -message "$body")
+        [ -n "$subtitle" ] && args+=(-subtitle "$subtitle")
+        [ -n "$NOTIFICATION_SOUND" ] && args+=(-sound "$NOTIFICATION_SOUND")
+        local icon
+        icon=$(resolve_claude_icon)
+        [ -n "$icon" ] && args+=(-appIcon "$icon")
+        # -group dedupes — if a notification with this group already
+        # exists in Notification Center, terminal-notifier replaces it.
+        # Per-session UUID keeps separate tabs in separate slots.
+        args+=(-group "iterm-notify-$group_id")
+        terminal-notifier "${args[@]}" >/dev/null 2>&1 || true
+        return
+    fi
+    # Fallback: osascript (Script Editor icon)
     local script="display notification \"${body//\"/\\\"}\" with title \"${title//\"/\\\"}\""
     if [ -n "$subtitle" ]; then
         script="$script subtitle \"${subtitle//\"/\\\"}\""
@@ -118,7 +153,8 @@ while IFS= read -r state_file; do
     fire_notification \
         "$label" \
         "Claude is waiting" \
-        "Idle for over ${THRESHOLD_MIN}m"
+        "Idle for over ${THRESHOLD_MIN}m" \
+        "$uuid"
     : > "$notified_file" 2>/dev/null || true
     log_msg "notified uuid=$uuid label=$label threshold_min=$THRESHOLD_MIN"
     notify_count=$((notify_count + 1))

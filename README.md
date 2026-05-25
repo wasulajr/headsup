@@ -420,12 +420,19 @@ notifies at most once — if you reply and Claude waits again, the next
 period gets its own notification. Multiple waiting tabs each get their
 own notification (no batching).
 
-First-run gotcha: macOS attributes the notification to **Script Editor**
-(because it's posted via `osascript`). The first invocation will trigger
-a permission prompt; click Allow. If notifications don't appear after
-that, check System Settings → Notifications → Script Editor →
-"Allow Notifications". For cleaner attribution you'd need to install
-`terminal-notifier` and swap the helper — not done by default.
+**Icon.** Install `terminal-notifier` (`brew install terminal-notifier`)
+and the notifier auto-detects it on the next sweep — the notification
+renders with the **Claude icon** (from `/Applications/Claude.app`) via
+terminal-notifier's `-appIcon`. Without terminal-notifier the notifier
+falls back to `osascript`, which always attributes to `Script Editor`
+and shows its icon. Either way the title/subtitle/body content is
+identical.
+
+**First-run permission.** macOS requires per-app notification permission.
+First time you run `/iterm-notifications test`, you'll get a permission
+prompt for whichever backend is active (terminal-notifier or Script
+Editor). Click Allow. If notifications stop appearing later, check
+System Settings → Notifications → find the app → "Allow Notifications".
 
 ## Troubleshooting
 

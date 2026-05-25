@@ -86,6 +86,18 @@ else
     note "  install:  brew install jq"
 fi
 
+# terminal-notifier is OPTIONAL — only used by /iterm-notifications and
+# only to render the Claude icon. Falls back to osascript (which shows
+# the Script Editor icon) if not installed. Don't count as a prereq
+# problem; just a recommendation.
+if command -v terminal-notifier >/dev/null 2>&1; then
+    ok "terminal-notifier $(terminal-notifier -version 2>&1 | head -1)"
+else
+    note "${DIM}optional:${RST} terminal-notifier not installed"
+    note "  ${DIM}install for the Claude icon in wait-notifications:${RST}  brew install terminal-notifier"
+    note "  ${DIM}(without it, notifications still fire but show the Script Editor icon)${RST}"
+fi
+
 if [ $PROBLEMS -gt 0 ]; then
     echo
     fatal "$PROBLEMS prerequisite(s) missing — install them and re-run this script."
