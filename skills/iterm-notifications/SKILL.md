@@ -7,7 +7,7 @@ description: Manage the macOS notification that fires when a Claude Code tab has
 
 The launchd watchdog (`claude-code.iterm-watchdog`) runs every 30 seconds. When it finds a tab whose state file has been orange (waiting) for longer than `THRESHOLD_MIN` minutes, it fires a macOS notification. This skill is the user-friendly way to toggle the feature, change the threshold, change the sound, or test that it works.
 
-The notifier prefers `terminal-notifier` (Homebrew) so it can render the **Claude icon** in the notification. If terminal-notifier isn't installed it falls back to `osascript`, which always shows the Script Editor icon. Either way the notification body is identical — only the icon differs.
+Notifications are posted from the bundled `headsup-notifier.app` at `~/Library/Application Support/headsup/`, so Notification Center renders them with the headsup icon. The bundle is built and installed by `setup.sh` (Step 5/8). No third-party dependencies like terminal-notifier are required.
 
 ## Usage forms
 
@@ -20,37 +20,42 @@ The notifier prefers `terminal-notifier` (Homebrew) so it can render the **Claud
 | `/iterm-notifications <N> on`     | Set threshold AND enable                                               |
 | `/iterm-notifications <N> off`    | Set threshold AND disable                                              |
 | `/iterm-notifications test`       | Fire a test notification right now (doesn't change config)             |
-| `/iterm-notifications sound <name>` | Set sound — any macOS system sound name (Glass, Ping, Submarine, …)  |
+| `/iterm-notifications sound <name>` | Set sound, any macOS system sound name (Glass, Ping, Submarine, etc.)|
 | `/iterm-notifications sound none` | Silence the notification                                               |
 
 ## What to do when invoked
 
-Run the helper script with the user's args. Don't try to parse the args yourself — pass them through unchanged. The helper updates the config in place and prints the resulting state.
+Run the helper script with the user's args. Don't try to parse the args yourself; pass them through unchanged. The helper updates the config in place and prints the resulting state.
 
 ```bash
 ~/.claude/hooks/iterm-notifications.sh "$@"
 ```
 
-If the user just said "turn on notifications" or "enable", pass `on`. "Turn them off" or "disable" → `off`. "Set the threshold to 10 minutes" or "wait 10 minutes" → `10`. "Test it" or "send me a test" → `test`.
+If the user just said "turn on notifications" or "enable", pass `on`. "Turn them off" or "disable" becomes `off`. "Set the threshold to 10 minutes" or "wait 10 minutes" becomes `10`. "Test it" or "send me a test" becomes `test`.
 
-After the helper prints the new state, **don't add a long explanation** — the output is clear enough. One short confirmation sentence if the change is non-obvious (e.g., "Notifications will now fire after 10 minutes of waiting").
+After the helper prints the new state, **don't add a long explanation**; the output is clear enough. One short confirmation sentence if the change is non-obvious (e.g., "Notifications will now fire after 10 minutes of waiting").
 
 ## First-run macOS permissions
 
-Notifications need OS-level permission per app:
+macOS requires per-bundle notification permission. The first time a notification fires (from `/iterm-notifications test` or a real wait), macOS shows "headsup wants to send notifications." Click **Allow**. The decision sticks to the bundle's codesigning identity, so future notifications fire silently.
 
-- **With terminal-notifier** (`brew install terminal-notifier`): the first test will trigger a permission prompt for `terminal-notifier`. Allow it.
-- **Fallback path (osascript)**: macOS attributes the notification to `Script Editor`. First test triggers a permission prompt for that.
+If notifications stop appearing later: System Settings, Notifications, scroll for `headsup`, ensure "Allow Notifications" is on.
 
-If notifications don't appear after the first test: System Settings → Notifications → find the relevant app (terminal-notifier or Script Editor) → ensure "Allow Notifications" is on.
+If `headsup` isn't in the list at all (rare, indicates macOS recorded a silent denial), the recovery is in the README's Troubleshooting section: bump the bundle ID in `notifier-app/Info.plist.template` and re-run `setup.sh` so macOS treats it as a fresh app.
 
-To upgrade from the fallback icon to the Claude icon:
+## Notification content
 
-```bash
-brew install terminal-notifier
-```
+What you see when a notification fires:
 
-The notifier auto-detects it on the next sweep — no config change needed.
+| Slot                 | Source                                                                            |
+|----------------------|-----------------------------------------------------------------------------------|
+| Top header + icon    | `headsup` (the bundle's CFBundleName) and the orange face icon                    |
+| Title (large, bold)  | The per-tab badge from `~/.claude/hooks/.state/<uuid>.badge` (matches the iTerm2 watermark; defaults to the project name, override via `/iterm-label`) |
+| Subtitle             | `Claude is waiting`                                                               |
+| Body                 | `Idle for <N>m` (or longer)                                                       |
+| Sound                | `NOTIFICATION_SOUND` from conf (default `Glass`)                                  |
+
+The title differing from the app name is how you tell which tab needs you when multiple are waiting.
 
 ## How the threshold actually applies
 
@@ -59,21 +64,23 @@ The notifier auto-detects it on the next sweep — no config change needed.
 The wait period is identified by:
 - `.state` color matches `WAIT_COLOR` (orange)
 - `.state` mtime is older than `THRESHOLD_MIN` minutes
-- No `.notified` sidecar exists, OR `.notified` is older than `.state` (= a fresh wait period started)
+- No `.notified` sidecar exists, OR `.notified` is older than `.state` (a fresh wait period started)
 
 When you respond (UserPromptSubmit), the state file gets rewritten with a new color and mtime; the next wait period restarts the cycle.
 
 ## What this skill DOESN'T do
 
-- Doesn't change tab colors or the dock-attention behavior — those still work whether notifications are on or off.
-- Doesn't notify per-event during Claude's normal turn-end (the tab going orange already handles fast feedback). Notifications are for the "I walked away, Claude finished, I forgot to come back" case.
-- Doesn't bundle / batch notifications across multiple tabs — each waiting tab gets its own.
+- Doesn't change tab colors or the dock-attention behavior; those still work whether notifications are on or off.
+- Doesn't notify per-event during Claude's normal turn-end. The tab going orange already handles fast feedback. Notifications are for the "I walked away, Claude finished, I forgot to come back" case.
+- Doesn't bundle or batch notifications across multiple tabs; each waiting tab gets its own.
+- Doesn't support sub-minute thresholds. `find -mmin` is integer-minute granularity, and the watchdog cadence is 30s. Sub-minute would require additional changes to both.
 
 ## Where the supporting files live
 
-- `~/.claude/hooks/iterm-notifications.sh` — this script (the skill helper)
-- `~/.claude/hooks/iterm-notifications.conf` — the persisted config
-- `~/.claude/hooks/iterm-notify-waiting.sh` — the actual notifier (called from the watchdog)
-- `~/.claude/hooks/iterm-watchdog.sh` — calls the notifier every 30s
+- `~/.claude/hooks/iterm-notifications.sh` is this skill's helper script
+- `~/.claude/hooks/iterm-notifications.conf` is the persisted config
+- `~/.claude/hooks/iterm-notify-waiting.sh` is the actual notifier sweep (called from the watchdog)
+- `~/.claude/hooks/iterm-watchdog.sh` calls the notifier every 30s
+- `~/Library/Application Support/headsup/headsup-notifier.app` is the Swift binary that posts the notification (so macOS renders the headsup icon)
 
 All under version control at `github.com/wasulajr/headsup`.
