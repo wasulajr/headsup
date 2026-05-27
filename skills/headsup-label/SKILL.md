@@ -10,6 +10,7 @@ Sets one shared string as both the iTerm2 badge (top-right watermark) and the wi
 ## Files involved
 
 - **`~/.claude/hooks/headsup-status.d/<session-key>.conf`** — per-session conf, sourced by the hook script after the global conf. Holds `headsup_badge_text()` and `headsup_title_text()` definitions that return the chosen label.
+- **`~/.claude/hooks/.state/<uuid>.badge`** — the badge sidecar that the waiting-notification script reads to label notifications. Normally `headsup-status.sh` refreshes it on every hook event, but this skill writes it directly so the notification picks up the new label without waiting for the next tool call.
 - The directory `headsup-status.d/` is gitignored; nothing committed.
 
 ## Flow
@@ -27,9 +28,12 @@ Sets one shared string as both the iTerm2 badge (top-right watermark) and the wi
    SESSION_ID=$(ps eww -p $PPID 2>/dev/null | tr ' ' '\n' | grep '^ITERM_SESSION_ID=' | head -1 | cut -d= -f2-)
    [ -z "$SESSION_ID" ] && { echo "ERROR: ITERM_SESSION_ID not found — are you in iTerm2?"; exit 1; }
    SESSION_KEY=$(printf '%s' "$SESSION_ID" | tr -c '[:alnum:]-' '_')
+   UUID="${SESSION_ID##*:}"   # the UUID portion the notify script keys on
    CONF_DIR="$HOME/.claude/hooks/headsup-status.d"
    CONF="$CONF_DIR/${SESSION_KEY}.conf"
-   mkdir -p "$CONF_DIR"
+   STATE_DIR="$HOME/.claude/hooks/.state"
+   BADGE_FILE="$STATE_DIR/${UUID}.badge"
+   mkdir -p "$CONF_DIR" "$STATE_DIR"
    cat > "$CONF" <<EOF
    # Per-iTerm2-session override for this pane.
    # Managed by /headsup-label. Local-only — headsup-status.d/ is gitignored.
@@ -38,6 +42,9 @@ Sets one shared string as both the iTerm2 badge (top-right watermark) and the wi
    headsup_badge_text() { printf '%s' "$LABEL"; }
    headsup_title_text() { printf '%s' "$LABEL"; }
    EOF
+   # Sync the badge sidecar so the waiting-notification script picks up the
+   # new label immediately, without waiting for the next hook event.
+   printf '%s\n' "$LABEL" > "$BADGE_FILE"
    # Walk up $PPID until a real tty appears
    pid=$PPID; tty="??"
    while [ "$tty" = "??" ] && [ "$pid" != "1" ]; do
@@ -48,7 +55,7 @@ Sets one shared string as both the iTerm2 badge (top-right watermark) and the wi
        BADGE_B64=$(printf '%s' "$LABEL" | base64)
        printf '\033]1337;SetBadgeFormat=%s\007\033]0;%s\007' "$BADGE_B64" "$LABEL" > "/dev/$tty"
    fi
-   echo "Wrote $CONF and applied to /dev/$tty"
+   echo "Wrote $CONF + $BADGE_FILE and applied to /dev/$tty"
    ```
 
    Use `printf '%s' "$LABEL"` (not `echo`) inside the conf so special chars in the label aren't interpreted. Don't commit / push — `headsup-status.d/` is gitignored and per-session ephemeral.
@@ -63,6 +70,7 @@ If the user wants to remove the per-session override and revert to the global de
 
 ```bash
 rm "$HOME/.claude/hooks/headsup-status.d/${SESSION_KEY}.conf"
+rm -f "$HOME/.claude/hooks/.state/${UUID}.badge"   # next hook event will repopulate from the default
 ```
 
 Then re-apply the global badge/title by computing them in a subshell that sources only the global conf, and writing the resulting OSC to the parent tty as in step 5.
