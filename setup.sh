@@ -2,6 +2,10 @@
 # iTerm2 status hooks + skills installer for Claude Code on macOS.
 # Idempotent. Re-running is safe — existing files are diffed and skipped if
 # identical, or you're prompted before any overwrite.
+#
+# Usage: setup.sh [--no-pull]
+#   By default setup.sh pulls the latest from GitHub before running so you
+#   always install the current version. Pass --no-pull to skip the pull.
 
 set -u
 
@@ -33,6 +37,41 @@ confirm() {
     a="${a:-$default}"
     [[ "$a" =~ ^[Yy]$ ]]
 }
+
+# ── Argument parsing ─────────────────────────────────────────────────────────
+PULL=1
+for _arg in "$@"; do
+    case "$_arg" in
+        --no-pull) PULL=0 ;;
+        --pull)    PULL=1 ;;
+    esac
+done
+
+# ── 0. Pull latest from GitHub ───────────────────────────────────────────────
+# Runs before the numbered steps so setup always installs the current version.
+# After a successful pull the script re-execs itself (--no-pull) so the rest
+# of the install runs with the freshly downloaded code.
+if [ "$PULL" = "1" ] && [ -d "$SCRIPT_DIR/.git" ]; then
+    header "Updating headsup from GitHub"
+    if git -C "$SCRIPT_DIR" fetch origin --quiet 2>/dev/null; then
+        _local=$(git -C "$SCRIPT_DIR" rev-parse HEAD)
+        _remote=$(git -C "$SCRIPT_DIR" rev-parse origin/main 2>/dev/null)
+        if [ "$_local" = "$_remote" ]; then
+            ok "Already up to date — $(git -C "$SCRIPT_DIR" log -1 --format='%h %s')"
+        else
+            _count=$(git -C "$SCRIPT_DIR" rev-list HEAD..origin/main --count)
+            note "Pulling $_count commit(s)..."
+            if git -C "$SCRIPT_DIR" pull origin main --quiet; then
+                ok "Updated to $(git -C "$SCRIPT_DIR" log -1 --format='%h %s')"
+                exec "$SCRIPT_DIR/setup.sh" --no-pull
+            else
+                warn "git pull failed — continuing with current version"
+            fi
+        fi
+    else
+        warn "Could not reach GitHub — continuing with current version"
+    fi
+fi
 
 PROBLEMS=0
 
@@ -376,6 +415,7 @@ note "  /headsup-resync-tab     force-resync a drifted tab"
 note "  /headsup-status         passive health snapshot (daemon, sessions, tokens)"
 note "  /headsup-diagnose       active end-to-end test (flashes tab colors)"
 note "  /headsup-notifications  toggle / threshold the 'Claude is waiting' macOS notification"
+note "  /headsup-update         pull the latest headsup from GitHub (or re-run setup.sh)"
 echo
 note "If something's off:"
 note "  touch ~/.claude/hooks/.debug      enable per-event logging"
