@@ -45,7 +45,8 @@ eval "$(printf '%s' "$input" | jq -r '
      ((.context_window.context_window_size // 200000) as $sz |
       ((.context_window.current_usage.input_tokens              // 0) +
        (.context_window.current_usage.cache_creation_input_tokens // 0) +
-       (.context_window.current_usage.cache_read_input_tokens    // 0)) as $used |
+       (.context_window.current_usage.cache_read_input_tokens    // 0) +
+       (.context_window.current_usage.output_tokens              // 0)) as $used |
       ($used * 100 / $sz | floor))
    end) as $pct |
   [
@@ -129,6 +130,10 @@ for ((i=0; i<BAR_WIDTH; i++)); do
     [ "$i" -lt "$FILLED" ] && BAR+="▓" || BAR+="░"
 done
 
-LINE="👤 ${DIM}${ACCOUNT}${RESET}  ${DIM}${MODEL}${RESET}  ctx: ${COLOR}${BAR} ${PCT}%${NOTE}${RESET}  ${DIM}${TOK_LABEL}${RESET}  ${DIM}${COST_LABEL}${RESET}"
+LINE="👤 ${DIM}${ACCOUNT}${RESET}  ${DIM}${MODEL}${RESET}"
+if [ "$PCT" -ge "$WARN_AT" ]; then
+    LINE+="  ctx: ${COLOR}${BAR} ${PCT}%${NOTE}${RESET}  ${DIM}${TOK_LABEL}${RESET}"
+fi
+LINE+="  ${DIM}${COST_LABEL}${RESET}"
 [ -n "$BRANCH" ] && LINE+="  ${DIM}⎇ ${BRANCH}${RESET}"
 printf '%s' "$LINE"
