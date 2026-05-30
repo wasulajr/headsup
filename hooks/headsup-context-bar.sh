@@ -82,6 +82,15 @@ else
     COST_LABEL="\$$(printf '%.2f' "$COST")"
 fi
 
+# ── Session and week usage windows ───────────────────────────────────────────
+# headsup-usage-windows.py aggregates output tokens from JSONL files and
+# caches results for 60s so this stays fast on every status line update.
+USAGE_WINDOWS_SCRIPT="$HOME/.claude/hooks/headsup-usage-windows.py"
+SESSION_PCT="" WEEK_PCT="" SESSION_RESET=""
+if [ -f "$USAGE_WINDOWS_SCRIPT" ]; then
+    eval "$(python3 "$USAGE_WINDOWS_SCRIPT" 2>/dev/null)" 2>/dev/null || true
+fi
+
 # ── macOS notification — mirrors headsup-notify-waiting.sh's fire_notification
 # Uses the bundled Swift notifier (custom icon) with osascript as fallback.
 fire_notification() {
@@ -140,6 +149,9 @@ if [ "$PCT" -ge "$WARN_AT" ]; then
     LINE+="  Context: ${COLOR}${BAR} ${PCT}%${NOTE}${RESET}"
 else
     LINE+="  ${DIM}${PCT}%${RESET}"
+fi
+if [ -n "$SESSION_PCT" ] && [ -n "$WEEK_PCT" ]; then
+    LINE+="  ${DIM}S:~${SESSION_PCT}%  W:~${WEEK_PCT}%${RESET}"
 fi
 LINE+="  Cost: ${DIM}${COST_LABEL}${RESET}"
 [ -n "$BRANCH" ] && LINE+="  ${DIM}⎇ ${BRANCH}${RESET}"
