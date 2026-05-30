@@ -144,10 +144,10 @@ else
     LINE+="  ${DIM}${PCT}%${RESET}"
 fi
 if [ -n "$SESSION_PCT" ]; then
-    LINE+="  Session: ${DIM}${SESSION_USED}/${SESSION_LIMIT_FMT} ~${SESSION_PCT}%${RESET}  ${DIM}cost ~\$${SESSION_COST}${RESET}"
+    LINE+="  Session: ${DIM}${SESSION_USED}/${SESSION_LIMIT_FMT} ~${SESSION_PCT}%${RESET}  ${DIM}API cost ~\$${SESSION_COST}${RESET}"
 fi
 if [ -n "$WEEK_PCT" ]; then
-    LINE+="  Week: ${DIM}${WEEK_USED}/${WEEK_LIMIT_FMT} ~${WEEK_PCT}%${RESET}  ${DIM}cost ~\$${WEEK_COST}${RESET}"
+    LINE+="  Week: ${DIM}${WEEK_USED}/${WEEK_LIMIT_FMT} ~${WEEK_PCT}%${RESET}  ${DIM}API cost ~\$${WEEK_COST}${RESET}"
 fi
 LINE+="  Cost: ${DIM}${COST_LABEL}${RESET}"
 [ -n "$BRANCH" ] && LINE+="  ${DIM}⎇ ${BRANCH}${RESET}"
