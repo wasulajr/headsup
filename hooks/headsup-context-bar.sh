@@ -132,8 +132,10 @@ done
 
 LINE="👤 ${DIM}${ACCOUNT}${RESET}  ${DIM}${MODEL}${RESET}"
 if [ "$PCT" -ge "$WARN_AT" ]; then
-    LINE+="  ctx: ${COLOR}${BAR} ${PCT}%${NOTE}${RESET}  ${DIM}${TOK_LABEL}${RESET}"
+    LINE+="  Context: ${COLOR}${BAR} ${PCT}%${NOTE}${RESET}"
+else
+    LINE+="  ${DIM}${PCT}%${RESET}"
 fi
-LINE+="  ${DIM}${COST_LABEL}${RESET}"
+LINE+="  ${DIM}${TOK_LABEL}${RESET}  ${DIM}${COST_LABEL}${RESET}"
 [ -n "$BRANCH" ] && LINE+="  ${DIM}⎇ ${BRANCH}${RESET}"
 printf '%s' "$LINE"
