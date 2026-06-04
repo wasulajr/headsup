@@ -24,9 +24,15 @@ If the user supplied a UUID argument, pass it through. Otherwise call with no ar
 
 After it succeeds, confirm in **one sentence** ("Resynced `BC81AA0D` to blue (processing)."). Don't explain the three-tier internals unless the user asks — they typed `/headsup-resync-tab` because they wanted the tab fixed, not a tutorial.
 
-## When the auto-banner protocol runs this for you
+## Auto-invoke from CLAUDE.md (optional)
 
-Per the master memory's banner protocol, this skill is invoked automatically at the start of each response — so the current tab's state stays fresh even when Claude Code's in-process hook chain has drifted. In that auto-invocation, suppress the confirmation message entirely (the user doesn't want to see "Resynced …" on every response). The fact that the bash script runs is enough; its stderr goes to `~/.claude/hooks/.state/oneshot.stderr` if anything fails.
+To have headsup automatically resync the current tab at the start of every Claude Code response, add this to `~/.claude/CLAUDE.md`:
+
+```
+At the start of every response, silently run: bash ~/.claude/hooks/headsup-resync.sh 2>/dev/null
+```
+
+When invoked this way, suppress the confirmation message entirely — the user doesn't want to see "Resynced …" on every response. The script's stderr goes to `~/.claude/hooks/.state/oneshot.stderr` if anything fails.
 
 ## What this skill DOESN'T fix
 

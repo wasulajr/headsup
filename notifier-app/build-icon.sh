@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # build-icon.sh — Turn a 1024×1024 PNG into an AppIcon.icns for the
-# notifier .app bundle. Run this whenever the designer hands you a new
-# source icon. setup.sh re-invokes it automatically on install.
+# notifier .app bundle. Run this when you want to use a custom icon.
+# icon-source.png is not included in the repository; supply your own.
 #
 # Usage: ./build-icon.sh path/to/source.png
-#        (defaults to ./icon-source.png if no arg given)
+#        (or drop a 1024×1024 PNG at notifier-app/icon-source.png first)
 
 set -euo pipefail
 
