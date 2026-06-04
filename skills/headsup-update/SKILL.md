@@ -33,16 +33,14 @@ If already up to date it says so and exits cleanly. Don't add commentary unless 
 
 ## If the script is missing
 
-The symlink may not exist yet (e.g. headsup was installed before this script was added). Fix it:
+`setup.sh` copies all hook scripts into `~/.claude/hooks/`. Re-run it from the headsup repo to restore any missing files:
 
 ```bash
-ln -s ../headsup/hooks/headsup-update.sh ~/.claude/hooks/headsup-update.sh
+cd /path/to/headsup
+./setup.sh
 ```
-
-Then re-run.
 
 ## Where files live
 
-- `~/.claude/headsup/hooks/headsup-update.sh` — the update script (source of truth)
-- `~/.claude/hooks/headsup-update.sh` — symlink installed by `setup.sh`
+- `~/.claude/hooks/headsup-update.sh` — the update script, copied here by `setup.sh`
 - Repo: github.com/wasulajr/headsup

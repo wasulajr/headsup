@@ -322,7 +322,7 @@ else
     fi
 fi
 
-# ── 6. Install skills ────────────────────────────────────────────────────────
+# ── 7. Install skills ────────────────────────────────────────────────────────
 header "Step 7/8 — installing skills into $CLAUDE_DIR/skills/"
 
 mkdir -p "$CLAUDE_DIR/skills"
@@ -359,7 +359,7 @@ for srcdir in "$SCRIPT_DIR/skills/"headsup-*/; do
 done
 note "${sinstalled} installed, ${soverwrote} overwritten, ${sskipped} skipped"
 
-# ── 7. Wire hooks into settings.json ─────────────────────────────────────────
+# ── 8. Wire hooks into settings.json ─────────────────────────────────────────
 header "Step 8/8 — wiring hooks into $SETTINGS"
 
 # The JSON shape Claude Code expects. Six events; all are load-bearing

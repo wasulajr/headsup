@@ -4,7 +4,7 @@ Observability for AI-native development workflows. Makes Claude Code's state gla
 
 Twenty tabs deep. You hear the Dock bounce. You glance at the tab bar. One tab is orange. That's [Claude Code](https://claude.com/claude-code) asking you a question. You switch over, answer it, watch it turn blue again, move on.
 
-Six Claude Code hooks, a persistent iTerm2 daemon, a launchd watchdog, a tiny notifier `.app` for macOS notifications, a live status bar that surfaces session and weekly quota consumption in real time, and eight companion skills you can run from any session. macOS and iTerm2 only. One-line install.
+Six Claude Code hooks, a persistent iTerm2 daemon, a launchd watchdog, a tiny notifier `.app` for macOS notifications, a live status bar that surfaces session and weekly quota consumption in real time, and seven companion skills you can run from any session. macOS and iTerm2 only. One-line install.
 
 ## At a glance
 
@@ -30,7 +30,7 @@ Plus:
 ```
 
 | Field | What it shows |
-|-------|--------------|
+|-------|______________|
 | `👤 you@example.com` | Claude account email from `~/.claude.json`. Updates automatically on account switch. |
 | `claude-sonnet-4-6` | Active model. |
 | `38%` | Context window usage. Green below 70%, yellow at 70%+ with a progress bar, red at 90%+. This is per-conversation context capacity. |
@@ -220,7 +220,7 @@ To swap the icon: drop a 1024x1024 PNG at `notifier-app/icon-source.png`, run `.
 - **Log rotation.** When `headsup-status.log` exceeds 5 MB, the bash hook moves it to `headsup-status.log.1` on the next invocation.
 - **Stale state-file GC.** Every 5 minutes the daemon sweeps `.state` files whose UUID is no longer a live iTerm2 session AND whose mtime is over 24 hours old.
 
-## Eight skills you can run from any Claude Code session
+## Seven skills you can run from any Claude Code session
 
 ### `/headsup-colors`: paint your tabs
 
@@ -305,7 +305,11 @@ DANGER_AT=90     # red bar + notifications start here
 # Quota limits (output tokens)
 HEADSUP_SESSION_LIMIT=17000000
 HEADSUP_WEEK_LIMIT=140000000
+```
 
+Edit `~/.claude/hooks/headsup-notifications.conf` for notification settings:
+
+```bash
 # Wait notification
 NOTIFICATION_SOUND="Glass"
 ```

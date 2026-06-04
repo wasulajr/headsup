@@ -98,10 +98,10 @@ fire_notification() {
     osascript -e "$script" 2>/dev/null || true
 }
 
-# ── Escalating notifications at 90, 95, 96, 97, 98, 99% ──────────────────
+# ── Escalating notifications at 90, 95, 97, 99% ──────────────────────────
 # State file tracks highest threshold notified. Resets below 85% (after
 # /compact or /clear) so the sequence fires again next time.
-ALERT_THRESHOLDS=(90 95 96 97 98 99)
+ALERT_THRESHOLDS=(90 95 97 99)
 STATE="/tmp/cc_ctx_alert_${SESSION}"
 _raw=$([ -f "$STATE" ] && cat "$STATE" || echo "0")
 [[ "$_raw" =~ ^[0-9]+$ ]] && LAST=$_raw || LAST=0
