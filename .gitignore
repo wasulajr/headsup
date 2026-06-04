@@ -5,3 +5,5 @@ __pycache__/
 *.bak
 *.log
 hooks/iterm2-venv/
+hooks/.state/
+hooks/headsup-status.d/
