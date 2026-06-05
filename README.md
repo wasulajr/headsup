@@ -4,7 +4,7 @@ Observability for AI-native development workflows. Makes Claude Code's state gla
 
 Twenty tabs deep. You hear the Dock bounce. You glance at the tab bar. One tab is orange. That's [Claude Code](https://claude.com/claude-code) asking you a question. You switch over, answer it, watch it turn blue again, move on.
 
-Six Claude Code hooks, a persistent iTerm2 daemon, a launchd watchdog, a tiny notifier `.app` for macOS notifications, a live status bar that surfaces session and weekly quota consumption in real time, and seven companion skills you can run from any session. macOS and iTerm2 only. One-line install.
+Six Claude Code hooks, a persistent iTerm2 daemon, a launchd watchdog, a tiny notifier `.app` for macOS notifications, a live status bar that surfaces session and weekly quota consumption in real time, eight companion skills you can run from any session, and a Finder Quick Action (⌘⌥C) that opens a new labeled Claude tab from any folder. macOS and iTerm2 only. One-line install.
 
 ## At a glance
 
@@ -79,6 +79,7 @@ headsup/
 │   ├── headsup-notify-waiting.sh         # fires macOS notification when a tab waits too long
 │   ├── headsup-notifications.sh          # /headsup-notifications skill helper
 │   ├── headsup-notifications.conf        # notifier config (enabled / threshold / sound)
+│   ├── headsup-set-label.sh              # set/clear the per-session label (/headsup-label + Quick Action)
 │   ├── iterm2-daemon.py                  # persistent daemon — holds the iTerm2 websocket
 │   ├── iterm2-apply-once.py              # one-shot fallback when the daemon is unavailable
 │   └── iterm2-set-tab-color.py           # ad-hoc testing helper
@@ -92,16 +93,17 @@ headsup/
 │   ├── build-notifier.sh
 │   └── build-icon.sh
 └── skills/
-    ├── headsup-colors/       # /headsup-colors         change idle/working/waiting colors
-    ├── headsup-label/        # /headsup-label          name this tab
-    ├── headsup-resync-tab/   # /headsup-resync-tab     fix a stuck tab
-    ├── headsup-status/       # /headsup-status         passive health snapshot
-    ├── headsup-diagnose/     # /headsup-diagnose       active end-to-end test
-    ├── headsup-notifications/# /headsup-notifications  toggle + threshold the wait notification
-    └── headsup-update/       # /headsup-update         pull latest from GitHub
+    ├── headsup-colors/           # /headsup-colors            change idle/working/waiting colors
+    ├── headsup-label/            # /headsup-label             name this tab
+    ├── headsup-new-tab-shortcut/ # /headsup-new-tab-shortcut  ⌘⌥C Finder Quick Action (bundle ships here)
+    ├── headsup-resync-tab/       # /headsup-resync-tab        fix a stuck tab
+    ├── headsup-status/           # /headsup-status            passive health snapshot
+    ├── headsup-diagnose/         # /headsup-diagnose          active end-to-end test
+    ├── headsup-notifications/    # /headsup-notifications     toggle + threshold the wait notification
+    └── headsup-update/           # /headsup-update            pull latest from GitHub
 ```
 
-`setup.sh` pulls the latest from GitHub, copies hooks and skills into `~/.claude/`, builds the notifier `.app`, installs the watchdog LaunchAgent, and wires events into `~/.claude/settings.json`.
+`setup.sh` pulls the latest from GitHub, copies hooks and skills into `~/.claude/`, builds the notifier `.app`, installs the watchdog LaunchAgent, installs the New Claude Tab Quick Action, and wires events into `~/.claude/settings.json`.
 
 ## Prerequisites
 
@@ -134,7 +136,8 @@ Each run:
 6. Compiles + installs the notifier `.app` to `~/Library/Application Support/headsup/`
 7. Installs and loads the watchdog LaunchAgent
 8. Copies skill folders to `~/.claude/skills/`
-9. Merges hook wiring into `~/.claude/settings.json`
+9. Installs the New Claude Tab Quick Action into `~/Library/Services/` and offers to bind ⌘⌥C (briefly restarts Finder)
+10. Merges hook wiring into `~/.claude/settings.json`
 
 After the script finishes:
 
@@ -220,7 +223,7 @@ To swap the icon: drop a 1024x1024 PNG at `notifier-app/icon-source.png`, run `.
 - **Log rotation.** When `headsup-status.log` exceeds 5 MB, the bash hook moves it to `headsup-status.log.1` on the next invocation.
 - **Stale state-file GC.** Every 5 minutes the daemon sweeps `.state` files whose UUID is no longer a live iTerm2 session AND whose mtime is over 24 hours old.
 
-## Seven skills you can run from any Claude Code session
+## Eight skills you can run from any Claude Code session
 
 ### `/headsup-colors`: paint your tabs
 
@@ -248,6 +251,35 @@ headsup_project_process_color() {
 ### `/headsup-label`: name this tab
 
 Override the default badge (basename of `$PWD`) for this iTerm2 pane only. Useful when three tabs are all working inside the same repo and you can't tell "deploy debugging" from "frontend refactor" from "prod incident" in the tab bar. Local-only, keyed to `ITERM_SESSION_ID`. Re-run after iTerm2 restart.
+
+All the work happens in one permanent script, `~/.claude/hooks/headsup-set-label.sh`. The skill just calls it with your label. Because every invocation starts with the same path, one permission rule in `~/.claude/settings.json` makes label changes prompt-free:
+
+```json
+{ "permissions": { "allow": ["Bash(~/.claude/hooks/headsup-set-label.sh:*)"] } }
+```
+
+The script also handles reverting: `~/.claude/hooks/headsup-set-label.sh --clear` removes the per-session override and re-applies the global default label.
+
+### `/headsup-new-tab-shortcut`: the ⌘⌥C Finder Quick Action
+
+Select a folder in Finder, press **⌘⌥C**: a new iTerm2 tab opens, you're asked for a label (defaults to the folder name; applied as tab title + badge via `headsup-set-label.sh`), then it `cd`s into the folder and launches `claude`.
+
+`setup.sh` installs the Quick Action automatically (step 9) and `/headsup-update` keeps it current, so the skill itself is the manual install/repair/removal path — run it when the hotkey stopped working, the Quick Action vanished from Finder's menu, or you want a different key combo.
+
+Configuration notes:
+
+- **The hotkey is per-machine**, stored in macOS `pbs` preferences, not in the bundle. To rebind it (here to ⌘⌥C):
+
+  ```bash
+  defaults write pbs NSServicesStatus -dict-add '"(null) - New Claude Tab - runWorkflowAsService"' '{ key_equivalent = "@~c"; }'
+  /System/Library/CoreServices/pbs -flush
+  killall Finder
+  ```
+
+  Key-equivalent cheat sheet: `@` = Command, `~` = Option, `^` = Control, `$` = Shift. So `@~c` = ⌘⌥C; swap the string for a different combo. The GUI path is System Settings, Keyboard, Keyboard Shortcuts, Services, Files & Folders, New Claude Tab.
+- **First run**: macOS asks to allow the Service to control iTerm2. Click OK. If you denied it, re-enable under System Settings, Privacy & Security, Automation.
+- **Skipping the label**: click Skip (or leave the field empty) and the tab opens with the normal headsup default label.
+- **Removal**: delete `~/Library/Services/New Claude Tab.workflow` and run `/System/Library/CoreServices/pbs -flush`.
 
 ### `/headsup-resync-tab`: fix a stuck tab
 
@@ -317,6 +349,8 @@ NOTIFICATION_SOUND="Glass"
 ### Per-session label
 
 Run `/headsup-label` in any Claude Code session and type the name you want. The badge and tab title update immediately. Stored in `~/.claude/hooks/headsup-status.d/<session-key>.conf`, which is gitignored.
+
+Under the hood the skill calls `~/.claude/hooks/headsup-set-label.sh`, which you can also run directly from any shell (the New Claude Tab Quick Action does exactly that). `--clear` reverts the pane to the global default label. Add the allow rule shown in the `/headsup-label` section above to make in-session label changes permission-prompt-free.
 
 ### Disable without uninstalling
 
@@ -395,7 +429,16 @@ chmod +x ~/.claude/hooks/*.sh ~/.claude/hooks/*.py
 ./notifier-app/build-notifier.sh "$HOME/Library/Application Support/headsup"
 ```
 
-### 5. Install the watchdog LaunchAgent
+### 5. Install the New Claude Tab Quick Action (optional)
+
+```bash
+cp -R "skills/headsup-new-tab-shortcut/New Claude Tab.workflow" ~/Library/Services/
+defaults write pbs NSServicesStatus -dict-add '"(null) - New Claude Tab - runWorkflowAsService"' '{ key_equivalent = "@~c"; }'
+/System/Library/CoreServices/pbs -flush
+killall Finder
+```
+
+### 6. Install the watchdog LaunchAgent
 
 ```bash
 sed "s|__HOME__|$HOME|g" \
@@ -405,10 +448,13 @@ sed "s|__HOME__|$HOME|g" \
 launchctl load ~/Library/LaunchAgents/claude-code.headsup-watchdog.plist
 ```
 
-### 6. Wire hooks and status bar in settings.json
+### 7. Wire hooks, status bar, and the label permission in settings.json
 
 ```json
 {
+  "permissions": {
+    "allow": ["Bash(~/.claude/hooks/headsup-set-label.sh:*)"]
+  },
   "hooks": {
     "SessionStart":     [{ "matcher": "", "hooks": [{ "type": "command", "command": "\"$HOME/.claude/hooks/headsup-status.sh\" SessionStart" }] }],
     "Notification":     [{ "matcher": "", "hooks": [{ "type": "command", "command": "\"$HOME/.claude/hooks/headsup-status.sh\" Notification" }] }],
