@@ -76,7 +76,7 @@ fi
 PROBLEMS=0
 
 # ── 1. Prerequisites ─────────────────────────────────────────────────────────
-header "Step 1/8 — checking prerequisites"
+header "Step 1/9 — checking prerequisites"
 
 if [ "$(uname -s)" != "Darwin" ]; then
     fatal "macOS only (saw $(uname -s))."
@@ -142,7 +142,7 @@ if [ $PROBLEMS -gt 0 ]; then
 fi
 
 # ── 2. iTerm2 Python API ─────────────────────────────────────────────────────
-header "Step 2/8 — iTerm2 Python API"
+header "Step 2/9 — iTerm2 Python API"
 
 API_ENABLED=$(defaults read com.googlecode.iterm2 EnableAPIServer 2>/dev/null || echo "")
 if [ "$API_ENABLED" = "1" ]; then
@@ -160,7 +160,7 @@ else
 fi
 
 # ── 3. Python venv with iterm2 package ───────────────────────────────────────
-header "Step 3/8 — Python venv at $VENV"
+header "Step 3/9 — Python venv at $VENV"
 
 if [ -d "$VENV" ] && [ -x "$VENV/bin/python" ]; then
     if "$VENV/bin/python" -c 'import iterm2' 2>/dev/null; then
@@ -182,7 +182,7 @@ else
 fi
 
 # ── 4. Install hook scripts ──────────────────────────────────────────────────
-header "Step 4/8 — installing hook scripts into $CLAUDE_DIR/hooks/"
+header "Step 4/9 — installing hook scripts into $CLAUDE_DIR/hooks/"
 
 mkdir -p "$CLAUDE_DIR/hooks"
 installed=0; skipped=0; overwrote=0
@@ -221,7 +221,7 @@ done
 note "${installed} installed, ${overwrote} overwritten, ${skipped} skipped"
 
 # ── 5. Build & install the notifier .app bundle ──────────────────────────────
-header "Step 5/8 — building notifier .app for custom notification icon"
+header "Step 5/9 — building notifier .app for custom notification icon"
 
 # The notifier is a tiny Swift binary inside a .app bundle. We compile
 # it from source at install time so the bundle's icon resource is OURS
@@ -249,7 +249,7 @@ else
 fi
 
 # ── 6. Install headsup-watchdog LaunchAgent ────────────────────────────────────
-header "Step 6/8 — installing LaunchAgent at $WATCHDOG_PLIST"
+header "Step 6/9 — installing LaunchAgent at $WATCHDOG_PLIST"
 
 # The watchdog is the outermost safety net for the headsup hook stack —
 # launchd fires it every 30s, completely independent of Claude Code. On
@@ -323,7 +323,7 @@ else
 fi
 
 # ── 7. Install skills ────────────────────────────────────────────────────────
-header "Step 7/8 — installing skills into $CLAUDE_DIR/skills/"
+header "Step 7/9 — installing skills into $CLAUDE_DIR/skills/"
 
 mkdir -p "$CLAUDE_DIR/skills"
 sinstalled=0; sskipped=0; soverwrote=0
@@ -359,8 +359,48 @@ for srcdir in "$SCRIPT_DIR/skills/"headsup-*/; do
 done
 note "${sinstalled} installed, ${soverwrote} overwritten, ${sskipped} skipped"
 
-# ── 8. Wire hooks into settings.json ─────────────────────────────────────────
-header "Step 8/8 — wiring hooks into $SETTINGS"
+# ── 8. Install the "New Claude Tab" Finder Quick Action ──────────────────────
+# Select a folder in Finder, press ⌘⌥C → new iTerm2 tab, label prompt
+# (headsup badge + title), cd into the folder, launch claude.
+# The bundle ships inside the headsup-new-tab-shortcut skill folder.
+header "Step 8/9 — installing the New Claude Tab Quick Action (⌘⌥C)"
+
+QA_NAME="New Claude Tab.workflow"
+QA_SRC="$SCRIPT_DIR/skills/headsup-new-tab-shortcut/$QA_NAME"
+QA_DST="$HOME/Library/Services/$QA_NAME"
+
+if [ ! -d "$QA_SRC" ]; then
+    warn "Quick Action bundle missing at $QA_SRC — skipping"
+else
+    mkdir -p "$HOME/Library/Services"
+    if [ -d "$QA_DST" ] && diff -qr "$QA_SRC" "$QA_DST" >/dev/null 2>&1; then
+        ok "$QA_NAME ${DIM}(identical, skipped)${RST}"
+    else
+        rm -rf "$QA_DST"
+        cp -R "$QA_SRC" "$QA_DST"
+        /System/Library/CoreServices/pbs -flush
+        ok "$QA_NAME installed into ~/Library/Services"
+    fi
+    # The ⌘⌥C hotkey lives in per-machine pbs prefs, not in the bundle,
+    # so it must be bound on each machine. killall Finder makes it take
+    # effect immediately (Finder relaunches automatically).
+    if defaults read pbs NSServicesStatus 2>/dev/null | grep -q "New Claude Tab"; then
+        ok "⌘⌥C hotkey already bound"
+    else
+        if confirm "Bind ⌘⌥C to New Claude Tab? (briefly restarts Finder)" y; then
+            defaults write pbs NSServicesStatus -dict-add '"(null) - New Claude Tab - runWorkflowAsService"' '{ key_equivalent = "@~c"; }'
+            /System/Library/CoreServices/pbs -flush
+            killall Finder
+            ok "Hotkey bound — select a folder in Finder and press ⌘⌥C"
+            note "First run: macOS asks to allow the Service to control iTerm2 — click OK"
+        else
+            warn "Skipped. Bind manually: System Settings → Keyboard → Keyboard Shortcuts → Services → New Claude Tab"
+        fi
+    fi
+fi
+
+# ── 9. Wire hooks into settings.json ─────────────────────────────────────────
+header "Step 9/9 — wiring hooks into $SETTINGS"
 
 # The JSON shape Claude Code expects. Six events; all are load-bearing
 # (see README.md → "How it works" for why).

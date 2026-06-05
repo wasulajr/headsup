@@ -45,6 +45,7 @@ echo
 # ── Note which files are changing before pulling ──────────────────────────────
 CHANGED=$(git -C "$HEADSUP_DIR" diff --name-only HEAD origin/main)
 DAEMON_CHANGED=$(echo "$CHANGED" | grep -c "iterm2-daemon.py" || true)
+QA_CHANGED=$(echo "$CHANGED" | grep -c "headsup-new-tab-shortcut/New Claude Tab.workflow" || true)
 
 # ── Pull ──────────────────────────────────────────────────────────────────────
 if ! git -C "$HEADSUP_DIR" pull origin main --quiet; then
@@ -63,6 +64,19 @@ if [ "$DAEMON_CHANGED" -gt 0 ]; then
             warn "iterm2-daemon.py changed — killed PID $DAEMON_PID; watchdog will respawn it within 30s"
         fi
     fi
+fi
+
+# ── Re-install the New Claude Tab Quick Action if the bundle changed ──────────
+# ~/Library/Services must hold a real copy (not a symlink), so a pull that
+# touches the bundle needs an explicit re-copy. Only re-installs if the
+# Quick Action was already installed — first-time install is setup.sh's job.
+QA_SRC="$HEADSUP_DIR/skills/headsup-new-tab-shortcut/New Claude Tab.workflow"
+QA_DST="$HOME/Library/Services/New Claude Tab.workflow"
+if [ "$QA_CHANGED" -gt 0 ] && [ -d "$QA_DST" ] && [ -d "$QA_SRC" ]; then
+    rm -rf "$QA_DST"
+    cp -R "$QA_SRC" "$QA_DST"
+    /System/Library/CoreServices/pbs -flush
+    ok "New Claude Tab Quick Action re-installed into ~/Library/Services"
 fi
 
 echo
