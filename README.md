@@ -137,7 +137,7 @@ Each run:
 7. Installs and loads the watchdog LaunchAgent
 8. Copies skill folders to `~/.claude/skills/`
 9. Installs the New Claude Tab Quick Action into `~/Library/Services/` and offers to bind ⌘⌥C (briefly restarts Finder)
-10. Merges hook wiring into `~/.claude/settings.json`
+10. Merges hook wiring into `~/.claude/settings.json` and adds the `permissions.allow` rule that makes `/headsup-label` prompt-free
 
 After the script finishes:
 
@@ -252,7 +252,7 @@ headsup_project_process_color() {
 
 Override the default badge (basename of `$PWD`) for this iTerm2 pane only. Useful when three tabs are all working inside the same repo and you can't tell "deploy debugging" from "frontend refactor" from "prod incident" in the tab bar. Local-only, keyed to `ITERM_SESSION_ID`. Re-run after iTerm2 restart.
 
-All the work happens in one permanent script, `~/.claude/hooks/headsup-set-label.sh`. The skill just calls it with your label. Because every invocation starts with the same path, one permission rule in `~/.claude/settings.json` makes label changes prompt-free:
+All the work happens in one permanent script, `~/.claude/hooks/headsup-set-label.sh`. The skill just calls it with your label. Because every invocation starts with the same path, one permission rule in `~/.claude/settings.json` makes label changes prompt-free (`setup.sh` adds this automatically):
 
 ```json
 { "permissions": { "allow": ["Bash(~/.claude/hooks/headsup-set-label.sh:*)"] } }

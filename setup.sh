@@ -438,6 +438,18 @@ else
     ok "Created"
 fi
 
+# Allow rule so /headsup-label (and the Quick Action's label step) can run
+# headsup-set-label.sh without a permission prompt. Additive and idempotent.
+LABEL_RULE='Bash(~/.claude/hooks/headsup-set-label.sh:*)'
+if jq -e --arg rule "$LABEL_RULE" '.permissions.allow // [] | index($rule) != null' "$SETTINGS" >/dev/null 2>&1; then
+    ok "permissions.allow rule for headsup-set-label.sh already present"
+else
+    jq --arg rule "$LABEL_RULE" '.permissions.allow = ((.permissions.allow // []) + [$rule])' "$SETTINGS" > "$SETTINGS.tmp" \
+        && mv "$SETTINGS.tmp" "$SETTINGS" \
+        && ok "Added permissions.allow rule: $LABEL_RULE" \
+        || warn "Could not add the allow rule. /headsup-label will prompt for permission each time."
+fi
+
 # ── Done ─────────────────────────────────────────────────────────────────────
 header "Setup complete"
 note "Next steps:"

@@ -17,7 +17,7 @@ Because every invocation starts with the same path, a single permission allowlis
 Bash(~/.claude/hooks/headsup-set-label.sh:*)
 ```
 
-(If the user reports a permission prompt, check that rule exists in `~/.claude/settings.json` under `permissions.allow`.)
+(setup.sh adds this rule automatically. If the user reports a permission prompt, check it exists in `~/.claude/settings.json` under `permissions.allow`.)
 
 ## Files involved
 
