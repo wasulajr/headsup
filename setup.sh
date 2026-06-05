@@ -185,6 +185,9 @@ fi
 header "Step 4/9 — installing hook scripts into $CLAUDE_DIR/hooks/"
 
 mkdir -p "$CLAUDE_DIR/hooks"
+# Record where this clone lives so headsup-update.sh can find the repo later.
+# The installed copies are severed from the clone, so update needs this pointer.
+printf '%s\n' "$SCRIPT_DIR" > "$CLAUDE_DIR/hooks/.headsup-repo"
 installed=0; skipped=0; overwrote=0
 for src in "$SCRIPT_DIR/hooks/"*; do
     [ -f "$src" ] || continue
