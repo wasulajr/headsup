@@ -470,6 +470,18 @@ launchctl load ~/Library/LaunchAgents/claude-code.headsup-watchdog.plist
 
 All six hook events are load-bearing. See *Event to color mapping* above for why each matters.
 
+## Releases
+
+headsup uses semver tags (`vX.Y.Z`). The installed version lives in `VERSION` at the repo root; changes per release are in [CHANGELOG.md](CHANGELOG.md).
+
+To cut a release (maintainers):
+
+```bash
+scripts/release.sh <major|minor|patch> -m "what changed" [-m "more" ...]
+```
+
+One command bumps `VERSION`, prepends the changelog section, commits, tags, and pushes with tags. Convention: PATCH for fixes, MINOR for new features/skills, MAJOR for breaking conf/layout changes that require re-running `setup.sh`. Every behavior-changing push to main goes through this script.
+
 ## What this isn't
 
 - **Cross-platform.** macOS + iTerm2 only. The daemon uses iTerm2's Python API; badge and title use iTerm2-proprietary OSC sequences.
