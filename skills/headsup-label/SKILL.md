@@ -1,6 +1,6 @@
 ---
 name: headsup-label
-description: Set or change the per-iTerm2-session label — both the window/tab title AND the badge (watermark) for THIS iTerm2 pane only. Use when the user wants a custom name for this specific tab ("call this tab 'deploy debugging'", "label this session 'prod work'", "set the badge to 'frontend'"). Title and badge always share the same string in this skill (per Steve's design — banner and watermark should match). Edits ~/.claude/hooks/headsup-status.d/<session>.conf which is LOCAL ONLY (gitignored, not pushed). For changing colors instead, use /headsup-colors.
+description: Set or change the per-iTerm2-session label — both the window/tab title AND the badge (watermark) for THIS iTerm2 pane only. Use when the user wants a custom name for this specific tab ("call this tab 'deploy debugging'", "label this session 'prod work'", "set the badge to 'frontend'"). Title and badge always share the same string in this skill (the banner and watermark always match). Edits ~/.claude/hooks/headsup-status.d/<session>.conf which is LOCAL ONLY (gitignored, not pushed). For changing colors instead, use /headsup-colors.
 ---
 
 # iTerm2 Per-Session Label

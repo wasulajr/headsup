@@ -4,7 +4,7 @@ Observability for AI-native development workflows. Makes Claude Code's state gla
 
 Twenty tabs deep. You hear the Dock bounce. You glance at the tab bar. One tab is orange. That's [Claude Code](https://claude.com/claude-code) asking you a question. You switch over, answer it, watch it turn blue again, move on.
 
-Six Claude Code hooks, a persistent iTerm2 daemon, a launchd watchdog, a tiny notifier `.app` for macOS notifications, a live status bar that surfaces session and weekly quota consumption in real time, eight companion skills you can run from any session, and a Finder Quick Action (⌘⌥C) that opens a new labeled Claude tab from any folder. macOS and iTerm2 only. One-line install.
+Six Claude Code hooks, a persistent iTerm2 daemon, a launchd watchdog, a tiny notifier `.app` for macOS notifications, a live status bar that surfaces session and weekly quota consumption in real time, and eight companion skills you can run from any session (including a ⌘⌥C Finder Quick Action that opens a new labeled Claude tab from any folder). macOS and iTerm2 only. One-line install.
 
 ## At a glance
 
@@ -73,13 +73,13 @@ headsup/
 │   ├── headsup-session-cost.py           # per-session token aggregator for /headsup-status
 │   ├── headsup-update.sh                 # pull latest from GitHub (/headsup-update)
 │   ├── headsup-resync.sh                 # force-resync a drifted tab (/headsup-resync-tab)
+│   ├── headsup-set-label.sh              # set/clear the per-session label (/headsup-label + Quick Action)
 │   ├── headsup-watchdog.sh               # outermost safety net (launchd, every 30s)
 │   ├── headsup-status-report.sh          # health snapshot (/headsup-status)
 │   ├── headsup-diagnose.sh               # active end-to-end test (/headsup-diagnose)
 │   ├── headsup-notify-waiting.sh         # fires macOS notification when a tab waits too long
 │   ├── headsup-notifications.sh          # /headsup-notifications skill helper
 │   ├── headsup-notifications.conf        # notifier config (enabled / threshold / sound)
-│   ├── headsup-set-label.sh              # set/clear the per-session label (/headsup-label + Quick Action)
 │   ├── iterm2-daemon.py                  # persistent daemon — holds the iTerm2 websocket
 │   ├── iterm2-apply-once.py              # one-shot fallback when the daemon is unavailable
 │   └── iterm2-set-tab-color.py           # ad-hoc testing helper
@@ -89,7 +89,6 @@ headsup/
 │   ├── headsup-notifier.swift            # Swift CLI posting via UNUserNotificationCenter
 │   ├── Info.plist.template
 │   ├── AppIcon.icns
-│   ├── icon-source.png
 │   ├── build-notifier.sh
 │   └── build-icon.sh
 └── skills/
@@ -126,18 +125,17 @@ cd headsup
 
 `setup.sh` is idempotent and safe to re-run. Re-running it pulls the latest from GitHub first, then applies any new hooks or skills. Pass `--no-pull` to skip the pull.
 
-Each run:
+Each run (after the optional GitHub pull):
 
-1. Pulls the latest from GitHub (skipped with `--no-pull`)
-2. Verifies all prerequisites
-3. Enables iTerm2's Python API if not already enabled
-4. Creates a Python venv at `~/.claude/hooks/iterm2-venv/`
-5. Copies hook scripts to `~/.claude/hooks/`
-6. Compiles + installs the notifier `.app` to `~/Library/Application Support/headsup/`
-7. Installs and loads the watchdog LaunchAgent
-8. Copies skill folders to `~/.claude/skills/`
-9. Installs the New Claude Tab Quick Action into `~/Library/Services/` and offers to bind ⌘⌥C (briefly restarts Finder)
-10. Merges hook wiring into `~/.claude/settings.json` and adds the `permissions.allow` rule that makes `/headsup-label` prompt-free
+1. Verifies all prerequisites
+2. Enables iTerm2's Python API if not already enabled
+3. Creates a Python venv at `~/.claude/hooks/iterm2-venv/`
+4. Copies hook scripts to `~/.claude/hooks/`
+5. Compiles + installs the notifier `.app` to `~/Library/Application Support/headsup/`
+6. Installs and loads the watchdog LaunchAgent
+7. Copies skill folders to `~/.claude/skills/`
+8. Installs the New Claude Tab Quick Action into `~/Library/Services/` and offers to bind ⌘⌥C (briefly restarts Finder)
+9. Merges hook wiring into `~/.claude/settings.json` and adds the `permissions.allow` rule that makes `/headsup-label` prompt-free
 
 After the script finishes:
 
@@ -227,7 +225,7 @@ To swap the icon: drop a 1024x1024 PNG at `notifier-app/icon-source.png`, run `.
 
 ### `/headsup-colors`: paint your tabs
 
-Run `/headsup-colors`, say which state (idle / working / waiting) and what hex color. The skill writes to `headsup-status.conf`, applies the color to your current tab instantly, and commits + pushes to your fork.
+Run `/headsup-colors`, say which state (idle / working / waiting) and what hex color. The skill writes to `headsup-status.conf`, applies the color to your current tab instantly, and commits + pushes if `~/.claude/` is a git repo.
 
 Defaults:
 ```bash
@@ -264,7 +262,7 @@ The script also handles reverting: `~/.claude/hooks/headsup-set-label.sh --clear
 
 Select a folder in Finder, press **⌘⌥C**: a new iTerm2 tab opens, you're asked for a label (defaults to the folder name; applied as tab title + badge via `headsup-set-label.sh`), then it `cd`s into the folder and launches `claude`.
 
-`setup.sh` installs the Quick Action automatically (step 9) and `/headsup-update` keeps it current, so the skill itself is the manual install/repair/removal path — run it when the hotkey stopped working, the Quick Action vanished from Finder's menu, or you want a different key combo.
+`setup.sh` installs the Quick Action automatically (step 8) and `/headsup-update` keeps it current, so the skill itself is the manual install/repair/removal path — run it when the hotkey stopped working, the Quick Action vanished from Finder's menu, or you want a different key combo.
 
 Configuration notes:
 
@@ -386,7 +384,7 @@ Run `/headsup-resync-tab`. Sends `RequestAttention=no` paired with the correct c
 
 ### "Notifications show the wrong icon"
 
-Most likely the notifier `.app` wasn't built. Re-run `setup.sh` and watch the Step 6 output. If `swiftc` is missing: `xcode-select --install`. If macOS silently denied notification permission before the icon was in place, go to System Settings, Notifications, find headsup, and flip it to Allow. If headsup isn't listed, change the bundle ID in `notifier-app/Info.plist.template` and re-run `setup.sh` — macOS treats the new ID as a fresh app and re-prompts.
+Most likely the notifier `.app` wasn't built. Re-run `setup.sh` and watch the Step 5 output. If `swiftc` is missing: `xcode-select --install`. If macOS silently denied notification permission before the icon was in place, go to System Settings, Notifications, find headsup, and flip it to Allow. If headsup isn't listed, change the bundle ID in `notifier-app/Info.plist.template` and re-run `setup.sh` — macOS treats the new ID as a fresh app and re-prompts.
 
 ### "I want to extend it"
 
