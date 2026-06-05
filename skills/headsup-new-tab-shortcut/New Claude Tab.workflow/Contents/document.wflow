@@ -51,8 +51,16 @@
 				<key>ActionParameters</key>
 				<dict>
 					<key>source</key>
-					<string>on run {input, parameters}
+					<string>on logMsg(msg)
+	try
+		do shell script "echo \"$(date '+%Y-%m-%d %H:%M:%S') \"" &amp; quoted form of msg &amp; " &gt;&gt; \"$HOME/Library/Logs/headsup-new-tab.log\""
+	end try
+end logMsg
+
+on run {input, parameters}
+	logMsg("workflow started")
 	set folderPath to POSIX path of (item 1 of input)
+	logMsg("folder: " &amp; folderPath)
 	-- default label suggestion = the selected folder's name
 	set prevTID to AppleScript's text item delimiters
 	set AppleScript's text item delimiters to "/"
@@ -68,6 +76,7 @@
 	-- launch claude with an initial prompt: Claude asks for the label in-session
 	set labelPrompt to "Before anything else, ask me what label to give this tab, suggesting \"" &amp; folderName &amp; "\" as the default. Then set my answer (or the default if I accept it) as the tab title and badge using the /headsup-label skill."
 	set shellCmd to "cd " &amp; quoted form of folderPath &amp; " &amp;&amp; claude " &amp; quoted form of labelPrompt
+	logMsg("about to tell iTerm2")
 	try
 		tell application "iTerm2"
 			activate
@@ -82,9 +91,9 @@
 				write text shellCmd
 			end tell
 		end tell
+		logMsg("iTerm2 tell completed OK")
 	on error errMsg number errNum
-		set logLine to "error " &amp; (errNum as text) &amp; ": " &amp; errMsg
-		do shell script "echo \"$(date '+%Y-%m-%d %H:%M:%S') \"" &amp; quoted form of logLine &amp; " &gt;&gt; \"$HOME/Library/Logs/headsup-new-tab.log\""
+		logMsg("ERROR " &amp; (errNum as text) &amp; ": " &amp; errMsg)
 	end try
 	return input
 end run
