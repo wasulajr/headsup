@@ -53,7 +53,7 @@
 					<key>source</key>
 					<string>on run {input, parameters}
 	set folderPath to POSIX path of (item 1 of input)
-	-- default label = the selected folder's name
+	-- default label suggestion = the selected folder's name
 	set prevTID to AppleScript's text item delimiters
 	set AppleScript's text item delimiters to "/"
 	set pathParts to text items of folderPath
@@ -65,33 +65,30 @@
 		end if
 	end repeat
 	set AppleScript's text item delimiters to prevTID
-	-- ask for the headsup label (tab title + badge). Skip = headsup default.
-	set labelText to ""
-	activate
+	-- launch claude with an initial prompt: Claude asks for the label in-session
+	set labelPrompt to "Before anything else, ask me what label to give this tab, suggesting \"" &amp; folderName &amp; "\" as the default. Then set my answer (or the default if I accept it) as the tab title and badge using the /headsup-label skill."
+	set shellCmd to "cd " &amp; quoted form of folderPath &amp; " &amp;&amp; claude " &amp; quoted form of labelPrompt
 	try
-		set dlg to display dialog "Label for this Claude tab (iTerm2 title + badge):" default answer folderName buttons {"Skip", "OK"} default button "OK" cancel button "Skip" with title "New Claude Tab"
-		set labelText to text returned of dlg
-	end try
-	set shellCmd to "cd " &amp; quoted form of folderPath &amp; " &amp;&amp; { "
-	if labelText is not "" then
-		set shellCmd to shellCmd &amp; "~/.claude/hooks/headsup-set-label.sh " &amp; quoted form of labelText &amp; " 2&gt;/dev/null; "
-	end if
-	set shellCmd to shellCmd &amp; "claude; }"
-	tell application "iTerm2"
-		activate
-		if (count of windows) = 0 then
-			create window with default profile
-		else
-			tell current window
-				create tab with default profile
+		tell application "iTerm2"
+			activate
+			if (count of windows) = 0 then
+				create window with default profile
+			else
+				tell current window
+					create tab with default profile
+				end tell
+			end if
+			tell current session of current window
+				write text shellCmd
 			end tell
-		end if
-		tell current session of current window
-			write text shellCmd
 		end tell
-	end tell
+	on error errMsg number errNum
+		set logLine to "error " &amp; (errNum as text) &amp; ": " &amp; errMsg
+		do shell script "echo \"$(date '+%Y-%m-%d %H:%M:%S') \"" &amp; quoted form of logLine &amp; " &gt;&gt; \"$HOME/Library/Logs/headsup-new-tab.log\""
+	end try
 	return input
-end run</string>
+end run
+</string>
 				</dict>
 				<key>BundleIdentifier</key>
 				<string>com.apple.Automator.RunScript</string>
