@@ -73,10 +73,24 @@ on run {input, parameters}
 		end if
 	end repeat
 	set AppleScript's text item delimiters to prevTID
-	-- launch claude with an initial prompt: Claude asks for the label in-session
-	set labelPrompt to "Before anything else, ask me what label to give this tab, suggesting \"" &amp; folderName &amp; "\" as the default. Then set my answer (or the default if I accept it) as the tab title and badge using the /headsup-label skill."
-	set shellCmd to "cd " &amp; quoted form of folderPath &amp; " &amp;&amp; claude " &amp; quoted form of labelPrompt
-	logMsg("about to tell iTerm2")
+	-- ask for the tab label via a native dialog (default = folder name; Skip = headsup default)
+	set theLabel to ""
+	try
+		set dlg to display dialog "Label for this Claude tab (sets the tab title + badge):" default answer folderName buttons {"Skip", "OK"} default button "OK" with title "New Claude Tab"
+		if button returned of dlg is "OK" then
+			set theLabel to text returned of dlg
+		end if
+	on error errMsg number errNum
+		logMsg("dialog cancelled/error " &amp; (errNum as text) &amp; ": " &amp; errMsg)
+		set theLabel to ""
+	end try
+	-- build shell command: apply the label inside the new session (deterministic, no LLM), then cd + claude
+	if theLabel is not "" then
+		set shellCmd to "~/.claude/hooks/headsup-set-label.sh " &amp; quoted form of theLabel &amp; " ; cd " &amp; quoted form of folderPath &amp; " &amp;&amp; claude"
+	else
+		set shellCmd to "cd " &amp; quoted form of folderPath &amp; " &amp;&amp; claude"
+	end if
+	logMsg("about to tell iTerm2 (label: " &amp; theLabel &amp; ")")
 	try
 		tell application "iTerm2"
 			activate
