@@ -2,6 +2,13 @@
 
 All notable changes to headsup. Versions follow [semver](https://semver.org/): MINOR for new features and skills, PATCH for fixes, MAJOR for breaking conf/layout changes that require re-running `setup.sh`.
 
+## [0.3.0] - 2026-06-09
+
+- Codex CLI support: iTerm2 tab colors, lifecycle hooks, watchdog, notifications, and the full skill set ported alongside Claude Code (setup-codex.sh, codex-skills/, headsup-codex-* hooks)
+- Daemon and apply-once made provider-agnostic via HEADSUP_HOOK_DIR so one codebase drives both ~/.claude and ~/.codex installs
+- Fix: quote headsup-colors and headsup-status skill descriptions so their YAML frontmatter parses (an unquoted colon made Codex silently skip both skills)
+- Fix: setup-codex.sh removes stale ~/.codex/skills/headsup-* from the prior install location so skills no longer show up twice
+
 ## [0.2.0] - 2026-06-05
 
 - Release tooling: scripts/release.sh, VERSION file, CHANGELOG.md, repo CLAUDE.md enforcing the release flow (#19)
