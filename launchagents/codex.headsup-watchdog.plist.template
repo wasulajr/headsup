@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>codex.headsup-watchdog</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__HOME__/.codex/hooks/headsup-codex-watchdog.sh</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>30</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/headsup-codex-__UID__/watchdog.stdout</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/headsup-codex-__UID__/watchdog.stderr</string>
+
+    <key>AbandonProcessGroup</key>
+    <true/>
+</dict>
+</plist>

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Persistent iTerm2 tab-color daemon for Claude Code hooks.
+"""Persistent iTerm2 tab-color daemon for headsup hooks.
 
-One daemon serves ALL iTerm2 sessions on this machine. The bash hook
-~/.claude/hooks/headsup-status.sh writes a per-session state file to
-~/.claude/hooks/.state/<session-uuid>.state in the form:
+One daemon serves all headsup-tracked iTerm2 sessions for one installed hook
+directory. The provider-specific bash hook writes a per-session state file to
+<hook-dir>/.state/<session-uuid>.state in the form:
 
     <6-char-hex>\\n             # color only (attention defaults to "no")
     <6-char-hex> <yes|no>\\n   # color + explicit attention
@@ -45,8 +45,8 @@ let the daemon "lose connection for long periods"):
    raced something on iTerm2's side.
 
 Auto-terminates after IDLE_TIMEOUT seconds with no state-file activity
-(typically when all Claude Code sessions close). Only one daemon may run
-at a time, enforced via an O_EXCL PID lock at .state/daemon.pid.
+(typically when all sessions for that provider close). Only one daemon may run
+per hook directory, enforced via an O_EXCL PID lock at .state/daemon.pid.
 """
 
 import asyncio
@@ -59,11 +59,12 @@ from pathlib import Path
 import iterm2
 
 
-STATE_DIR = Path(os.path.expanduser("~/.claude/hooks/.state"))
+HOOK_DIR = Path(os.environ.get("HEADSUP_HOOK_DIR", Path(__file__).resolve().parent)).expanduser()
+STATE_DIR = Path(os.environ.get("HEADSUP_STATE_DIR", HOOK_DIR / ".state")).expanduser()
 PID_FILE = STATE_DIR / "daemon.pid"
 HEARTBEAT_FILE = STATE_DIR / ".daemon.heartbeat"
-LOG_FILE = Path(os.path.expanduser("~/.claude/hooks/headsup-status.log"))
-DEBUG_FLAG = Path(os.path.expanduser("~/.claude/hooks/.debug"))
+LOG_FILE = HOOK_DIR / "headsup-status.log"
+DEBUG_FLAG = HOOK_DIR / ".debug"
 POLL_INTERVAL = 0.03           # 30ms
 HEARTBEAT_INTERVAL = 0.2       # 200ms — bash hook treats heartbeat > 1s old as stale
 LIVENESS_INTERVAL = 1.0        # active WS probe cadence

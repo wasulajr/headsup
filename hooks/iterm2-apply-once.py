@@ -37,8 +37,11 @@ import sys
 import iterm2
 
 
-LOG_PATH = os.path.expanduser("~/.claude/hooks/headsup-status.log")
-DEBUG_FLAG = os.path.expanduser("~/.claude/hooks/.debug")
+HOOK_DIR = os.path.expanduser(
+    os.environ.get("HEADSUP_HOOK_DIR", os.path.dirname(os.path.abspath(__file__)))
+)
+LOG_PATH = os.path.join(HOOK_DIR, "headsup-status.log")
+DEBUG_FLAG = os.path.join(HOOK_DIR, ".debug")
 
 # Retry budget for the session-not-found case. The first call to
 # app.windows might miss a brand-new session if the iTerm2 API hasn't

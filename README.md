@@ -1,25 +1,25 @@
 # headsup
 
-Observability for AI-native development workflows. Makes Claude Code's state glanceable in iTerm2 — and tells you exactly how close you are to hitting your usage limits before Anthropic throttles you.
+Observability for AI-native development workflows. Makes Claude Code and Codex state glanceable in iTerm2 — and tells Claude Code users exactly how close they are to hitting Anthropic usage limits before throttling.
 
 Twenty tabs deep. You hear the Dock bounce. You glance at the tab bar. One tab is orange. That's [Claude Code](https://claude.com/claude-code) asking you a question. You switch over, answer it, watch it turn blue again, move on.
 
-Six Claude Code hooks, a persistent iTerm2 daemon, a launchd watchdog, a tiny notifier `.app` for macOS notifications, a live status bar that surfaces session and weekly quota consumption in real time, and eight companion skills you can run from any session (including a ⌘⌥C Finder Quick Action that opens a new labeled Claude tab from any folder). macOS and iTerm2 only. One-line install.
+Claude Code hooks, Codex hooks, a persistent iTerm2 daemon, a launchd watchdog, a tiny notifier `.app` for macOS notifications, a live Claude status bar that surfaces session and weekly quota consumption in real time, and eight companion skills you can run from any Claude session (including a ⌘⌥C Finder Quick Action that opens a new labeled Claude tab from any folder). macOS and iTerm2 only. One-line install for Claude, separate opt-in install for Codex.
 
 ## At a glance
 
 | Color  | State   | What it means                                                       |
 |--------|---------|---------------------------------------------------------------------|
 | white  | idle    | session is open, nothing in flight                                  |
-| blue   | working | Claude is processing your prompt or running a tool                  |
-| orange | waiting | Claude needs you (and the Dock icon bounces for good measure)       |
+| blue   | working | the agent is processing your prompt or running a tool               |
+| orange | waiting | the agent needs you or has finished its turn                        |
 
-The three transitions you actually care about all happen within ~50 ms of the underlying Claude Code event. The color is already right by the time your eye gets to the tab.
+For Codex, orange means Codex has stopped or is waiting on a permission request. The three transitions you actually care about all happen within ~50 ms of the underlying hook event when the daemon is healthy. The color is already right by the time your eye gets to the tab.
 
 Plus:
 
 - A **badge** in the top-right of every iTerm2 pane showing your project name. Stays readable when you're screen-recording or pair-programming and the tab bar is off screen.
-- A **tab title** of `Claude · <project>`, pinned so Claude Code's TUI can't overwrite it mid-render.
+- A **tab title** of `Claude · <project>` or `Codex · <project>`, pinned so the agent TUI can't overwrite it mid-render.
 - A **live status bar** at the bottom of every Claude Code session (details below).
 - A **kill switch** (`touch ~/.claude/hooks/.disabled`) and per-event **debug logging** (`touch ~/.claude/hooks/.debug`) for when something goes sideways.
 
@@ -64,9 +64,11 @@ The limits are approximate, derived by reverse-engineering the percentages Claud
 ```
 headsup/
 ├── README.md
-├── setup.sh                              # one-shot installer (idempotent, safe to re-run)
+├── setup.sh                              # Claude Code installer (idempotent, safe to re-run)
+├── setup-codex.sh                        # Codex CLI installer (idempotent, safe to re-run)
 ├── hooks/
 │   ├── headsup-status.sh                 # bash entry point — Claude Code hooks call this
+│   ├── headsup-codex-status.sh           # bash entry point — Codex hooks call this
 │   ├── headsup-status.conf               # color + badge defaults (edit to customize)
 │   ├── headsup-context-bar.sh            # statusLine hook: account, model, context, quotas, cost
 │   ├── headsup-usage-windows.py          # JSONL aggregator for session/week token counts and cost
@@ -143,6 +145,31 @@ After the script finishes:
 - Open a new iTerm2 tab and run `claude`. The first hook event triggers an iTerm2 permission dialog. Click **"Always Allow"**.
 - The first time a notification fires, macOS will prompt for permission. Click **Allow**.
 - Type a prompt. The tab turns blue while Claude works, orange when it stops to ask you something.
+
+## Codex install
+
+Codex support uses Codex lifecycle hooks and the same iTerm2 daemon. Hooks and state install into `~/.codex/`; Codex skills install into `~/.agents/skills/`, which is the user-skill directory scanned by Codex:
+
+```bash
+cd headsup
+./setup-codex.sh
+```
+
+Then start a new iTerm2 tab and run `codex`. If Codex reports that hooks need review, run `/hooks` and trust the headsup hook definitions.
+
+Codex color mapping:
+
+| Codex event | Tab color | Dock attention | Why |
+|-------------|-----------|----------------|-----|
+| `SessionStart` | white | no | Fresh Codex session |
+| `UserPromptSubmit` | blue | no | You sent a prompt; Codex is working |
+| `PreToolUse` / `PostToolUse` | blue | no | Codex is running or returning from a tool |
+| `PermissionRequest` | orange | yes | Codex is asking for approval |
+| `Stop` | orange | yes | Codex finished its turn |
+| `PreCompact` / `PostCompact` | blue | no | Codex is compacting context |
+| `SubagentStart` / `SubagentStop` | blue | no | A subagent is active or returning |
+
+Codex support also installs Codex-native headsup skills, wait notifications, `$headsup-colors`, `$headsup-status`, `$headsup-diagnose`, `$headsup-label`, `$headsup-resync-tab`, `$headsup-update`, and a New Codex Tab Quick Action. Claude-only features are the Anthropic quota estimates, Claude JSONL cost aggregation, Claude statusLine hook, and the New Claude Tab Quick Action.
 
 ## How it works
 
