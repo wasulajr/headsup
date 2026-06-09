@@ -2,6 +2,10 @@
 
 All notable changes to headsup. Versions follow [semver](https://semver.org/): MINOR for new features and skills, PATCH for fixes, MAJOR for breaking conf/layout changes that require re-running `setup.sh`.
 
+## [0.3.1] - 2026-06-09
+
+- Developer notes: document the SKILL.md YAML frontmatter quoting gotcha in CLAUDE.md (an unquoted colon in a description silently hides the skill from the menu); includes the quoting rule and a ruby one-liner to verify a skill parses before committing
+
 ## [0.3.0] - 2026-06-09
 
 - Codex CLI support: iTerm2 tab colors, lifecycle hooks, watchdog, notifications, and the full skill set ported alongside Claude Code (setup-codex.sh, codex-skills/, headsup-codex-* hooks)
