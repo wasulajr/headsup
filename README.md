@@ -30,7 +30,7 @@ Plus:
 ```
 
 | Field | What it shows |
-|-------|______________|
+|-------|---------------|
 | `👤 you@example.com` | Claude account email from `~/.claude.json`. Updates automatically on account switch. |
 | `claude-sonnet-4-6` | Active model. |
 | `38%` | Context window usage. Green below 70%, yellow at 70%+ with a progress bar, red at 90%+. This is per-conversation context capacity. |
@@ -64,16 +64,17 @@ The limits are approximate, derived by reverse-engineering the percentages Claud
 ```
 headsup/
 ├── README.md
+├── CHANGELOG.md                          # per-release changes
+├── VERSION                               # installed version (semver)
 ├── setup.sh                              # Claude Code installer (idempotent, safe to re-run)
 ├── setup-codex.sh                        # Codex CLI installer (idempotent, safe to re-run)
 ├── hooks/
-│   ├── headsup-status.sh                 # bash entry point — Claude Code hooks call this
-│   ├── headsup-codex-status.sh           # bash entry point — Codex hooks call this
+│   ├── headsup-status.sh                 # bash entry point called by Claude Code hooks
 │   ├── headsup-status.conf               # color + badge defaults (edit to customize)
 │   ├── headsup-context-bar.sh            # statusLine hook: account, model, context, quotas, cost
 │   ├── headsup-usage-windows.py          # JSONL aggregator for session/week token counts and cost
 │   ├── headsup-session-cost.py           # per-session token aggregator for /headsup-status
-│   ├── headsup-update.sh                 # pull latest from GitHub (/headsup-update)
+│   ├── headsup-update.sh                 # pull latest + re-sync live files (/headsup-update)
 │   ├── headsup-resync.sh                 # force-resync a drifted tab (/headsup-resync-tab)
 │   ├── headsup-set-label.sh              # set/clear the per-session label (/headsup-label + Quick Action)
 │   ├── headsup-watchdog.sh               # outermost safety net (launchd, every 30s)
@@ -82,29 +83,37 @@ headsup/
 │   ├── headsup-notify-waiting.sh         # fires macOS notification when a tab waits too long
 │   ├── headsup-notifications.sh          # /headsup-notifications skill helper
 │   ├── headsup-notifications.conf        # notifier config (enabled / threshold / sound)
-│   ├── iterm2-daemon.py                  # persistent daemon — holds the iTerm2 websocket
+│   ├── headsup-codex-status.sh           # bash entry point called by Codex hooks
+│   ├── headsup-codex-*.sh                # Codex ports: diagnose, label, notifications, notify-waiting, resync, status-report, update, watchdog
+│   ├── iterm2-daemon.py                  # persistent daemon holding the iTerm2 websocket (serves Claude + Codex)
 │   ├── iterm2-apply-once.py              # one-shot fallback when the daemon is unavailable
 │   └── iterm2-set-tab-color.py           # ad-hoc testing helper
 ├── launchagents/
-│   └── claude-code.headsup-watchdog.plist.template
+│   ├── claude-code.headsup-watchdog.plist.template
+│   └── codex.headsup-watchdog.plist.template
 ├── notifier-app/
 │   ├── headsup-notifier.swift            # Swift CLI posting via UNUserNotificationCenter
 │   ├── Info.plist.template
 │   ├── AppIcon.icns
 │   ├── build-notifier.sh
 │   └── build-icon.sh
-└── skills/
-    ├── headsup-colors/           # /headsup-colors            change idle/working/waiting colors
-    ├── headsup-label/            # /headsup-label             name this tab
-    ├── headsup-new-tab-shortcut/ # /headsup-new-tab-shortcut  ⌘⌥C Finder Quick Action (bundle ships here)
-    ├── headsup-resync-tab/       # /headsup-resync-tab        fix a stuck tab
-    ├── headsup-status/           # /headsup-status            passive health snapshot
-    ├── headsup-diagnose/         # /headsup-diagnose          active end-to-end test
-    ├── headsup-notifications/    # /headsup-notifications     toggle + threshold the wait notification
-    └── headsup-update/           # /headsup-update            pull latest from GitHub
+├── scripts/
+│   └── release.sh                        # version bump + changelog + tag + push (see Releases)
+├── skills/                        # Claude Code skills (installed to ~/.claude/skills/)
+│   ├── headsup-colors/            # /headsup-colors            change idle/working/waiting colors
+│   ├── headsup-label/             # /headsup-label             name this tab
+│   ├── headsup-new-tab-shortcut/  # /headsup-new-tab-shortcut  ⌘⌥C Finder Quick Action (bundle ships here)
+│   ├── headsup-resync-tab/        # /headsup-resync-tab        fix a stuck tab
+│   ├── headsup-status/            # /headsup-status            passive health snapshot
+│   ├── headsup-diagnose/          # /headsup-diagnose          active end-to-end test
+│   ├── headsup-notifications/     # /headsup-notifications     toggle + threshold the wait notification
+│   └── headsup-update/            # /headsup-update            pull latest from GitHub
+└── codex-skills/                  # Codex ports of the same 8 skills (installed to ~/.agents/skills/)
 ```
 
 `setup.sh` pulls the latest from GitHub, copies hooks and skills into `~/.claude/`, builds the notifier `.app`, installs the watchdog LaunchAgent, installs the New Claude Tab Quick Action, and wires events into `~/.claude/settings.json`.
+
+`setup-codex.sh` does the Codex equivalent: hooks and state into `~/.codex/`, skills into `~/.agents/skills/`, plus its own watchdog LaunchAgent.
 
 ## Prerequisites
 
@@ -341,7 +350,7 @@ Defaults: enabled, 5-minute threshold, `Glass` sound. Multiple waiting tabs each
 /headsup-update
 ```
 
-Pulls, shows a changelog, and restarts the daemon if `iterm2-daemon.py` changed.
+Pulls, shows a changelog, then applies the update: re-syncs the pulled hooks and skills into `~/.claude/` (your `headsup-status.conf` and `headsup-notifications.conf` are never overwritten), restarts the daemon if `iterm2-daemon.py` changed, and re-installs the New Claude Tab Quick Action if the bundle changed.
 
 ## Customization
 
