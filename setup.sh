@@ -3,9 +3,11 @@
 # Idempotent. Re-running is safe — existing files are diffed and skipped if
 # identical, or you're prompted before any overwrite.
 #
-# Usage: setup.sh [--no-pull]
+# Usage: setup.sh [--no-pull] [--no-permissions]
 #   By default setup.sh pulls the latest from GitHub before running so you
 #   always install the current version. Pass --no-pull to skip the pull.
+#   Pass --no-permissions to skip the settings.json permissions.allow merge
+#   for the sfl/nil helpers (the rules are printed for manual paste instead).
 
 set -u
 
@@ -40,10 +42,12 @@ confirm() {
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 PULL=1
+PERMS=1
 for _arg in "$@"; do
     case "$_arg" in
-        --no-pull) PULL=0 ;;
-        --pull)    PULL=1 ;;
+        --no-pull)        PULL=0 ;;
+        --pull)           PULL=1 ;;
+        --no-permissions) PERMS=0 ;;
     esac
 done
 
@@ -63,7 +67,9 @@ if [ "$PULL" = "1" ] && [ -d "$SCRIPT_DIR/.git" ]; then
             note "Pulling $_count commit(s)..."
             if git -C "$SCRIPT_DIR" pull origin main --quiet; then
                 ok "Updated to $(git -C "$SCRIPT_DIR" log -1 --format='%h %s')"
-                exec "$SCRIPT_DIR/setup.sh" --no-pull
+                _reexec_args=(--no-pull)
+                [ "$PERMS" = "0" ] && _reexec_args+=(--no-permissions)
+                exec "$SCRIPT_DIR/setup.sh" "${_reexec_args[@]}"
             else
                 warn "git pull failed — continuing with current version"
             fi
@@ -223,6 +229,49 @@ for src in "$SCRIPT_DIR/hooks/"*; do
 done
 note "${installed} installed, ${overwrote} overwritten, ${skipped} skipped"
 
+# ── 4b. Install sfl helpers ──────────────────────────────────────────────────
+header "Step 4b — installing sfl helpers into $CLAUDE_DIR/sfl/lib/"
+
+# The /sfl and /nil skills call these via the Bash tool. They are not hooks,
+# so they don't live in hooks/ — ~/.claude/sfl/lib/ is the canonical path the
+# skills, docs, and permission rules all reference. ~/.claude/sfl/ itself is
+# the runtime data dir (live entries + archive/), created by the helpers on
+# demand.
+mkdir -p "$CLAUDE_DIR/sfl/lib"
+hinstalled=0; hskipped=0; hoverwrote=0
+for src in "$SCRIPT_DIR/sfl/lib/"*.sh; do
+    [ -f "$src" ] || continue
+    name=$(basename "$src")
+    dst="$CLAUDE_DIR/sfl/lib/$name"
+    if [ -L "$dst" ]; then
+        ok "$name ${DIM}(symlink, leaving as-is)${RST}"
+        hskipped=$((hskipped+1)); continue
+    fi
+    if [ -f "$dst" ]; then
+        if cmp -s "$src" "$dst"; then
+            ok "$name ${DIM}(identical, skipped)${RST}"
+            hskipped=$((hskipped+1)); continue
+        fi
+        warn "$name exists at $dst and differs"
+        if confirm "Overwrite (backup at $dst.bak)?"; then
+            cp "$dst" "$dst.bak"
+            cp "$src" "$dst"
+            chmod +x "$dst" 2>/dev/null || true
+            ok "$name installed ${DIM}(backup at $name.bak)${RST}"
+            hoverwrote=$((hoverwrote+1))
+        else
+            warn "$name skipped at user request"
+            hskipped=$((hskipped+1))
+        fi
+    else
+        cp "$src" "$dst"
+        chmod +x "$dst" 2>/dev/null || true
+        ok "$name installed"
+        hinstalled=$((hinstalled+1))
+    fi
+done
+note "${hinstalled} installed, ${hoverwrote} overwritten, ${hskipped} skipped"
+
 # ── 5. Build & install the notifier .app bundle ──────────────────────────────
 header "Step 5/9 — building notifier .app for custom notification icon"
 
@@ -330,7 +379,8 @@ header "Step 7/9 — installing skills into $CLAUDE_DIR/skills/"
 
 mkdir -p "$CLAUDE_DIR/skills"
 sinstalled=0; sskipped=0; soverwrote=0
-for srcdir in "$SCRIPT_DIR/skills/"headsup-*/; do
+# Globs every skill dir, which picks up sfl/ and nil/ alongside headsup-*/.
+for srcdir in "$SCRIPT_DIR/skills/"*/; do
     [ -d "$srcdir" ] || continue
     name=$(basename "$srcdir")
     dst="$CLAUDE_DIR/skills/$name"
@@ -453,6 +503,42 @@ else
         || warn "Could not add the allow rule. /headsup-label will prompt for permission each time."
 fi
 
+# Allow rules for the sfl helpers and the sfl data dir, so /sfl saves and
+# /nil restores never hit a permission prompt. BOTH the tilde and the
+# $HOME-expanded absolute form of each rule are required: Claude Code's
+# permission matcher is literal, and /nil's baked resume prompts can carry
+# either form, so a single form leaves the other one prompting. The absolute
+# form is computed from $HOME at install time, never hardcoded.
+SFL_RULES=(
+    'Bash(~/.claude/sfl/lib/window-id.sh:*)'
+    'Bash(~/.claude/sfl/lib/sfl-entry.sh:*)'
+    'Bash(~/.claude/sfl/lib/nil-open.sh:*)'
+    "Bash($HOME/.claude/sfl/lib/window-id.sh:*)"
+    "Bash($HOME/.claude/sfl/lib/sfl-entry.sh:*)"
+    "Bash($HOME/.claude/sfl/lib/nil-open.sh:*)"
+    'Read(~/.claude/sfl/**)'
+    "Read($HOME/.claude/sfl/**)"
+)
+if [ "$PERMS" = "0" ]; then
+    note "--no-permissions: skipping the sfl/nil allow-rule merge."
+    note "For promptless /sfl + /nil, add these to .permissions.allow in $SETTINGS yourself:"
+    for r in "${SFL_RULES[@]}"; do note "    $r"; done
+else
+    SFL_RULES_JSON=$(printf '%s\n' "${SFL_RULES[@]}" | jq -R . | jq -s .)
+    SFL_MISSING=$(jq -r --argjson new "$SFL_RULES_JSON" '($new - (.permissions.allow // []))[]' "$SETTINGS" 2>/dev/null)
+    if [ -z "$SFL_MISSING" ]; then
+        ok "sfl/nil permissions.allow rules already present"
+    else
+        note "Merging sfl/nil allow rules into $SETTINGS (backup at settings.json.bak):"
+        while IFS= read -r r; do note "  + $r"; done <<< "$SFL_MISSING"
+        cp "$SETTINGS" "$SETTINGS.bak"
+        jq --argjson new "$SFL_RULES_JSON" '.permissions.allow = ((.permissions.allow // []) + $new | unique)' "$SETTINGS" > "$SETTINGS.tmp" \
+            && mv "$SETTINGS.tmp" "$SETTINGS" \
+            && ok "sfl/nil allow rules merged" \
+            || warn "Could not merge the sfl/nil allow rules. /sfl and /nil will prompt for permission. (Re-run, or pass --no-permissions and paste them manually.)"
+    fi
+fi
+
 # ── Done ─────────────────────────────────────────────────────────────────────
 header "Setup complete"
 note "Next steps:"
@@ -464,6 +550,8 @@ note "  3. Type any prompt. The tab should turn blue while Claude works, then"
 note "     orange when it's waiting for you."
 echo
 note "Customize from any Claude Code session:"
+note "  /sfl                    save this window for later (checkpoint to ~/.claude/sfl/)"
+note "  /nil                    now is later: reopen every saved window in its own tab"
 note "  /headsup-colors         change the global color palette"
 note "  /headsup-label          set this tab's title + badge"
 note "  /headsup-resync-tab     force-resync a drifted tab"
