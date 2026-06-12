@@ -7,3 +7,8 @@ __pycache__/
 hooks/iterm2-venv/
 hooks/.state/
 hooks/headsup-status.d/
+# sfl runtime data lives in ~/.claude/sfl/ (entries + archive/), never in the
+# repo. Guard against runtime files landing here if the repo is cloned into
+# ~/.claude itself.
+sfl/*.md
+sfl/archive/
