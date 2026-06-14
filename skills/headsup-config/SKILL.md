@@ -12,11 +12,12 @@ One entry point for every headsup setting. The first word of the arguments selec
 | Section | What it sets | Backing helper |
 |---|---|---|
 | `newtabs` | New Claude Tab (Cmd-Opt-C) launch mode | `~/.claude/hooks/headsup-newtab-args.sh` |
+| `codextabs` | New Codex Tab launch mode | `~/.claude/hooks/headsup-newtab-args.sh --codex` |
 | `colors` | idle / processing / waiting tab colors (global) | the `/headsup-colors` procedure |
 | `label` | this tab's title + badge (per-session) | `~/.claude/hooks/headsup-set-label.sh` |
 | `notify` | the "Claude is waiting" macOS notification | `~/.claude/hooks/headsup-notifications.sh` |
 
-Accepted section aliases: `newtab`/`autorun` -> `newtabs`; `color` -> `colors`; `title`/`badge` -> `label`; `notifications` -> `notify`.
+Accepted section aliases: `newtab`/`autorun` -> `newtabs`; `codex`/`codextab` -> `codextabs`; `color` -> `colors`; `title`/`badge` -> `label`; `notifications` -> `notify`.
 
 ## What to do when invoked
 
@@ -25,16 +26,23 @@ Accepted section aliases: `newtab`/`autorun` -> `newtabs`; `color` -> `colors`; 
 2. **No section, or `show` / `status` / `help`:** show every current setting, then stop. Run these (read-only) and summarize the output:
    ```bash
    ~/.claude/hooks/headsup-newtab-args.sh --show
+   ~/.claude/hooks/headsup-newtab-args.sh --codex --show
    ~/.claude/hooks/headsup-notifications.sh            # prints current notify state
    grep -E '^(IDLE|PROCESS|WAIT)_COLOR=' ~/.claude/hooks/headsup-status.conf
    ```
-   Also note the current per-session label is whatever `/headsup-label` last set (mention it is per-tab). List the four sections so the user knows what they can change.
+   Also note the current per-session label is whatever `/headsup-label` last set (mention it is per-tab). List the sections so the user knows what they can change.
 
 3. **`newtabs <rest>`:** run the setter, passing `rest` through unchanged:
    ```bash
    ~/.claude/hooks/headsup-newtab-args.sh <rest>
    ```
    `rest` is one of `off | acceptEdits | plan | full`, `-- <raw args>`, or `--show`. Empty `rest` -> run with `--show`. Confirm the printed value in one line; it takes effect on the next Cmd-Opt-C.
+
+   **`codextabs <rest>`:** same setter, but for the New Codex Tab. Prepend `--codex`:
+   ```bash
+   ~/.claude/hooks/headsup-newtab-args.sh --codex <rest>
+   ```
+   `rest` is one of `off | full-auto | yolo | never|on-request|on-failure|untrusted | approval <policy>`, `-- <raw args>`, or `--show` (codex flags differ from claude's). Empty `rest` -> run with `--codex --show`.
 
 4. **`label <rest>`:** run the per-session label setter:
    ```bash
