@@ -7,6 +7,10 @@ description: Install, update, re-bind, or remove the "New Claude Tab" macOS Find
 
 A macOS Quick Action (Automator Service). Select a folder in Finder, press **⌘⌥C** → a dialog asks for a label (defaults to the folder name) → a new iTerm2 tab opens, the label is applied as tab title + badge via `headsup-set-label.sh`, then `cd <folder> && claude`.
 
+**Launch mode is configurable.** The workflow reads `NEWTAB_CLAUDE_ARGS` from `~/.claude/hooks/headsup-status.conf` and appends it to `claude`. Empty (the default) is normal interactive mode; set it to start every shortcut-launched session in a given permission mode (e.g. `--permission-mode acceptEdits` for autorun, `--dangerously-skip-permissions` for full autorun). Manage it with `/headsup-config newtabs` (`off` / `acceptEdits` / `plan` / `full` / raw args) rather than hand-editing.
+
+**Cold start vs warm start.** When iTerm2 is already running, the action opens one new tab in the current window. When iTerm2 is *not* running, `activate` makes iTerm2 spawn its own launch window asynchronously; the action detects this (via a System Events process check before activating), waits for that window to appear, and reuses it, so exactly one window opens instead of two.
+
 The bundle ships inside this skill folder: `New Claude Tab.workflow/`. The label step calls `~/.claude/hooks/headsup-set-label.sh`, which writes the same per-session conf that `/headsup-label` manages (`~/.claude/hooks/headsup-status.d/<session-key>.conf` + the `.state/<uuid>.badge` sidecar), so the label survives across hook events exactly like a `/headsup-label` label. Clicking **Skip** (or leaving the field empty) opens the tab with the normal headsup default label.
 
 **This skill is rarely needed** — `setup.sh` step 8 installs the Quick Action on a new machine, and `headsup-update.sh` re-copies it to `~/Library/Services` whenever a pull changed the bundle. Use this skill when something's broken or the user wants a manual (re)install, hotkey change, or removal.

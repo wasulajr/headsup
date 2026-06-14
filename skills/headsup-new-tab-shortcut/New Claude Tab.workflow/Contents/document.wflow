@@ -84,22 +84,55 @@ on run {input, parameters}
 		logMsg("dialog cancelled/error " &amp; (errNum as text) &amp; ": " &amp; errMsg)
 		set theLabel to ""
 	end try
+	-- read the configured launch args for claude from the headsup conf
+	-- (NEWTAB_CLAUDE_ARGS; empty = normal interactive mode). Change it with the
+	-- /headsup-config newtabs skill or by editing headsup-status.conf.
+	set claudeArgs to ""
+	try
+		set claudeArgs to do shell script "f=\"$HOME/.claude/hooks/headsup-status.conf\"; [ -f \"$f\" ] &amp;&amp; . \"$f\"; printf '%s' \"${NEWTAB_CLAUDE_ARGS:-}\""
+	end try
+	set claudeCmd to "claude"
+	if claudeArgs is not "" then set claudeCmd to "claude " &amp; claudeArgs
 	-- build shell command: apply the label inside the new session (deterministic, no LLM), then cd + claude
 	if theLabel is not "" then
-		set shellCmd to "~/.claude/hooks/headsup-set-label.sh " &amp; quoted form of theLabel &amp; " ; cd " &amp; quoted form of folderPath &amp; " &amp;&amp; claude"
+		set shellCmd to "~/.claude/hooks/headsup-set-label.sh " &amp; quoted form of theLabel &amp; " ; cd " &amp; quoted form of folderPath &amp; " &amp;&amp; " &amp; claudeCmd
 	else
-		set shellCmd to "cd " &amp; quoted form of folderPath &amp; " &amp;&amp; claude"
+		set shellCmd to "cd " &amp; quoted form of folderPath &amp; " &amp;&amp; " &amp; claudeCmd
 	end if
 	logMsg("about to tell iTerm2 (label: " &amp; theLabel &amp; ")")
+	-- Detect whether iTerm2 is ALREADY running before we activate it. A cold
+	-- launch makes iTerm2 spawn its own default window asynchronously, so if we
+	-- blindly "create window" we end up with two. System Events reads the
+	-- process list without launching iTerm2.
+	set itermWasRunning to false
+	try
+		tell application "System Events" to set itermWasRunning to (exists (processes whose name is "iTerm2"))
+	end try
+	logMsg("iTerm2 wasRunning: " &amp; (itermWasRunning as text))
 	try
 		tell application "iTerm2"
 			activate
-			if (count of windows) = 0 then
-				create window with default profile
+			if itermWasRunning then
+				-- existing instance: open one new tab (or a window if none are open)
+				if (count of windows) = 0 then
+					create window with default profile
+				else
+					tell current window
+						create tab with default profile
+					end tell
+				end if
 			else
-				tell current window
-					create tab with default profile
-				end tell
+				-- cold start: wait for the window iTerm2 opens on launch, then
+				-- REUSE it instead of adding another, so exactly one window opens.
+				set waited to 0.0
+				repeat while (count of windows) = 0 and waited &lt; 4.0
+					delay 0.1
+					set waited to waited + 0.1
+				end repeat
+				if (count of windows) = 0 then
+					-- profile is set to not open a window on launch: make exactly one
+					create window with default profile
+				end if
 			end if
 			tell current session of current window
 				write text shellCmd
