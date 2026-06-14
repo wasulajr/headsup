@@ -453,6 +453,17 @@ else
         || warn "Could not add the allow rule. /headsup-label will prompt for permission each time."
 fi
 
+# Allow rule so /headsup-config newtabs can run the setter without a prompt.
+NEWTAB_ARGS_RULE='Bash(~/.claude/hooks/headsup-newtab-args.sh:*)'
+if jq -e --arg rule "$NEWTAB_ARGS_RULE" '.permissions.allow // [] | index($rule) != null' "$SETTINGS" >/dev/null 2>&1; then
+    ok "permissions.allow rule for headsup-newtab-args.sh already present"
+else
+    jq --arg rule "$NEWTAB_ARGS_RULE" '.permissions.allow = ((.permissions.allow // []) + [$rule])' "$SETTINGS" > "$SETTINGS.tmp" \
+        && mv "$SETTINGS.tmp" "$SETTINGS" \
+        && ok "Added permissions.allow rule: $NEWTAB_ARGS_RULE" \
+        || warn "Could not add the allow rule. /headsup-config newtabs will prompt for permission each time."
+fi
+
 # ── Done ─────────────────────────────────────────────────────────────────────
 header "Setup complete"
 note "Next steps:"
@@ -466,6 +477,7 @@ echo
 note "Customize from any Claude Code session:"
 note "  /headsup-colors         change the global color palette"
 note "  /headsup-label          set this tab's title + badge"
+note "  /headsup-config         settings hub: newtabs (launch mode) | colors | label | notify"
 note "  /headsup-resync-tab     force-resync a drifted tab"
 note "  /headsup-status         passive health snapshot (daemon, sessions, tokens)"
 note "  /headsup-diagnose       active end-to-end test (flashes tab colors)"
