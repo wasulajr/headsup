@@ -111,6 +111,19 @@ for srcdir in "$HEADSUP_DIR/skills/"headsup-*/; do
 done
 if [ "$synced" -gt 0 ]; then ok "Re-synced $synced item(s) into ~/.claude"; else ok "Live files already in sync"; fi
 
+# ── Ensure permission allow rules ─────────────────────────────────────────────
+# A pulled release may add skills that need new allow rules. Without this, an
+# updater would be missing rules a fresh setup.sh install gets (and would be
+# prompted on first use). Shared ensurer; additive + idempotent.
+ENSURE="$HEADSUP_DIR/hooks/headsup-ensure-permissions.sh"
+if [ -x "$ENSURE" ]; then
+    if "$ENSURE" "$CLAUDE_DIR/settings.json" >/dev/null 2>&1; then
+        ok "Permission allow rules ensured"
+    else
+        warn "Could not ensure permission allow rules; some skills may prompt on first use"
+    fi
+fi
+
 # ── Restart daemon if its script changed ──────────────────────────────────────
 if [ "$DAEMON_CHANGED" -gt 0 ]; then
     DAEMON_PID_FILE="$HOME/.claude/hooks/.state/daemon.pid"

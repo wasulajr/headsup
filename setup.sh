@@ -441,27 +441,16 @@ else
     ok "Created"
 fi
 
-# Allow rule so /headsup-label (and the Quick Action's label step) can run
-# headsup-set-label.sh without a permission prompt. Additive and idempotent.
-LABEL_RULE='Bash(~/.claude/hooks/headsup-set-label.sh:*)'
-if jq -e --arg rule "$LABEL_RULE" '.permissions.allow // [] | index($rule) != null' "$SETTINGS" >/dev/null 2>&1; then
-    ok "permissions.allow rule for headsup-set-label.sh already present"
+# Allow rules so the headsup skills (/headsup-label, /headsup-config newtabs and
+# notify, /headsup-notifications) run without a permission prompt. Delegated to
+# the shared ensurer so setup.sh and headsup-update.sh stay in lockstep.
+# Additive and idempotent.
+if [ -x "$SCRIPT_DIR/hooks/headsup-ensure-permissions.sh" ]; then
+    "$SCRIPT_DIR/hooks/headsup-ensure-permissions.sh" "$SETTINGS" \
+        && ok "Ensured headsup permission allow rules" \
+        || warn "Could not ensure permission allow rules; some skills may prompt on first use."
 else
-    jq --arg rule "$LABEL_RULE" '.permissions.allow = ((.permissions.allow // []) + [$rule])' "$SETTINGS" > "$SETTINGS.tmp" \
-        && mv "$SETTINGS.tmp" "$SETTINGS" \
-        && ok "Added permissions.allow rule: $LABEL_RULE" \
-        || warn "Could not add the allow rule. /headsup-label will prompt for permission each time."
-fi
-
-# Allow rule so /headsup-config newtabs can run the setter without a prompt.
-NEWTAB_ARGS_RULE='Bash(~/.claude/hooks/headsup-newtab-args.sh:*)'
-if jq -e --arg rule "$NEWTAB_ARGS_RULE" '.permissions.allow // [] | index($rule) != null' "$SETTINGS" >/dev/null 2>&1; then
-    ok "permissions.allow rule for headsup-newtab-args.sh already present"
-else
-    jq --arg rule "$NEWTAB_ARGS_RULE" '.permissions.allow = ((.permissions.allow // []) + [$rule])' "$SETTINGS" > "$SETTINGS.tmp" \
-        && mv "$SETTINGS.tmp" "$SETTINGS" \
-        && ok "Added permissions.allow rule: $NEWTAB_ARGS_RULE" \
-        || warn "Could not add the allow rule. /headsup-config newtabs will prompt for permission each time."
+    warn "headsup-ensure-permissions.sh missing; skills may prompt for permission on first use."
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
