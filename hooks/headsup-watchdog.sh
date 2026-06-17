@@ -95,7 +95,24 @@ fi
 
 # ── 3b. Fire Tier 2 for each recent state file ───────────────────────────
 # Covers the gap between "spawned daemon" and "daemon's first reconcile".
+#
+# Backpressure guard: NEVER pile a fresh batch on top of one that's still
+# draining. Each one-shot is a ~33MB Python proc; if a previous batch is
+# blocked on a contended iTerm2 API and we keep adding ~one-per-recent-state
+# every 30s, it snowballs into hundreds of stuck procs that wedge iTerm2
+# (and contend the API further, keeping the daemon heartbeat stale, which
+# keeps us in this branch — a runaway loop). If the previous batch hasn't
+# cleared, skip this round and let it drain; the respawned daemon (3a) is
+# the real recovery path anyway.
 if [ -x "$VENV_PYTHON" ] && [ -f "$ONESHOT_SCRIPT" ]; then
+    inflight=$(pgrep -f "iterm2-apply-once.py" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${inflight:-0}" -gt 8 ]; then
+        log_msg "tier2-skip reason=backlog inflight=$inflight"
+        # Fall through to the wait-notifier sweep; do not fan out.
+        [ -x "$HOME/.claude/hooks/headsup-notify-waiting.sh" ] && \
+            "$HOME/.claude/hooks/headsup-notify-waiting.sh" 2>/dev/null || true
+        exit 0
+    fi
     find "$STATE_DIR" -maxdepth 1 -name '*.state' -mtime -1 2>/dev/null | while read -r f; do
         uuid=$(basename "$f" .state)
         content=$(cat "$f" 2>/dev/null | head -1)
