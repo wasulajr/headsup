@@ -2,6 +2,11 @@
 
 All notable changes to headsup. Versions follow [semver](https://semver.org/): MINOR for new features and skills, PATCH for fixes, MAJOR for breaking conf/layout changes that require re-running `setup.sh`.
 
+## [0.3.2] - 2026-06-17
+
+- Fix apply-once.py runaway that wedged iTerm2: SIGALRM hard timeout (15s) so one-shots can never hang forever on a contended iTerm2 API
+- Add watchdog backpressure guard: skip the Tier 2 fan-out when >8 one-shots are already in flight, breaking the snowball at the source
+
 ## [0.3.1] - 2026-06-09
 
 - Developer notes: document the SKILL.md YAML frontmatter quoting gotcha in CLAUDE.md (an unquoted colon in a description silently hides the skill from the menu); includes the quoting rule and a ruby one-liner to verify a skill parses before committing
