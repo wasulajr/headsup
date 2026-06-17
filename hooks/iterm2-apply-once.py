@@ -32,6 +32,7 @@ Args:
 import asyncio
 import datetime
 import os
+import signal
 import sys
 
 import iterm2
@@ -42,6 +43,18 @@ HOOK_DIR = os.path.expanduser(
 )
 LOG_PATH = os.path.join(HOOK_DIR, "headsup-status.log")
 DEBUG_FLAG = os.path.join(HOOK_DIR, ".debug")
+
+# Hard wall-clock ceiling for this entire one-shot. This script is a Tier 2
+# fallback that connects to iTerm2's API, sets one color, and exits — the
+# healthy path is well under a second. Without a hard cap it can hang
+# FOREVER: run_until_complete(retry=True) keeps retrying a refused/contended
+# API connection indefinitely, and the watchdog fires a fresh batch of these
+# every 30s. Under contention that snowballs into hundreds of stuck Python
+# procs (each ~33MB), which then contends iTerm2's API further — the exact
+# runaway that wedges iTerm2. SIGALRM guarantees death no matter where we're
+# blocked (connect, websocket read, asyncio await). Generous enough that a
+# genuinely transient API refusal still gets its retries.
+WALL_CLOCK_TIMEOUT_SEC = 15
 
 # Retry budget for the session-not-found case. The first call to
 # app.windows might miss a brand-new session if the iTerm2 API hasn't
@@ -133,11 +146,25 @@ async def main(connection):
     log(f"applied color={color} attention={attention} uuid={uuid}")
 
 
+def _wall_clock_timeout(signum, frame):
+    # Last-resort guard: we've blown the wall-clock budget (almost always a
+    # wedged/contended iTerm2 API connection). Log and die immediately via
+    # os._exit so no asyncio/iterm2 cleanup path can swallow the exit and
+    # keep us alive. Exit 0 — this is a best-effort fallback, a noisy
+    # non-zero exit would just clutter the async-fired caller.
+    log(f"error reason=wall-clock-timeout limit={WALL_CLOCK_TIMEOUT_SEC}s")
+    os._exit(0)
+
+
 try:
-    # retry=True so a momentarily busy iTerm2 API server doesn't make us
-    # fail the apply outright — iterm2 will keep trying to connect rather
-    # than raising.
+    # Arm the hard ceiling before we touch the API. retry=True still lets a
+    # momentarily busy iTerm2 API server get retried rather than failing the
+    # apply outright — but SIGALRM now bounds those retries so they can never
+    # become an unbounded hang.
+    signal.signal(signal.SIGALRM, _wall_clock_timeout)
+    signal.alarm(WALL_CLOCK_TIMEOUT_SEC)
     iterm2.run_until_complete(main, retry=True)
+    signal.alarm(0)
 except SystemExit:
     raise
 except BaseException as exc:
