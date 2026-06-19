@@ -2,6 +2,10 @@
 
 All notable changes to headsup. Versions follow [semver](https://semver.org/): MINOR for new features and skills, PATCH for fixes, MAJOR for breaking conf/layout changes that require re-running `setup.sh`.
 
+## [0.3.4] - 2026-06-19
+
+- Fix daemon state-dir split-brain (#25): daemon no longer resolves its install symlink, so its heartbeat/pid/state land in ~/.claude/hooks/.state where the watchdog reads — ends the endless daemon respawn + Tier 2 fan-out and restores the fast color path
+
 ## [0.3.3] - 2026-06-19
 
 - Fix ghost 'Claude is waiting' notifications for closed tabs: notifier now verifies the session is a live iTerm2 tab before firing and reaps stale state markers (headsup-notify-waiting.sh liveness gate)
