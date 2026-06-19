@@ -104,12 +104,86 @@ session_label() {
 
 [ -d "$STATE_DIR" ] || exit 0
 
+VENV_PYTHON="$HOME/.claude/hooks/iterm2-venv/bin/python"
+
 # find -mmin +N matches files whose mtime is older than N minutes.
-# Iterate those candidates rather than scanning all state files.
+# Gather candidates up front so we resolve liveness at most once per sweep.
+candidates=$(find "$STATE_DIR" -maxdepth 1 -name '*.state' -mmin "+$THRESHOLD_MIN" 2>/dev/null)
+[ -z "$candidates" ] && exit 0
+
+# ── Liveness gate ─────────────────────────────────────────────────────────
+# A window closed while Claude was in the orange "waiting" state leaves a
+# stale .state whose mtime never advances, so without this check the sweep
+# fires a ghost "Claude is waiting" notification for a tab that no longer
+# exists. Resolve the set of live iTerm2 sessions and, in the loop, skip +
+# reap any candidate that isn't live. Use the iTerm2 Python API: osascript
+# session enumeration is unreliable on some setups, and the API reports the
+# same session_id that keys the .state files. Runs at most once per sweep
+# and only when a candidate exists, so the sub-second call never touches the
+# steady-state (nothing-waiting) path. The SIGALRM cap keeps a wedged API
+# from stalling the 30s watchdog. If we can't reach the API we cannot prove
+# a session is dead, so we fall back to firing (old behavior) rather than
+# risk suppressing a real notification.
+LIVE_SESSIONS=""
+LIVENESS_KNOWN=0
+if [ -x "$VENV_PYTHON" ]; then
+    LIVE_SESSIONS=$("$VENV_PYTHON" - <<'PY' 2>/dev/null
+import signal, os, iterm2
+def _bail(*_): os._exit(3)
+signal.signal(signal.SIGALRM, _bail); signal.alarm(10)
+async def main(c):
+    app = await iterm2.async_get_app(c)
+    # Without an explicit refresh app.windows can come back empty right
+    # after connect; that false "zero sessions" would make us reap/suppress
+    # live tabs. Refresh, and if we still enumerate zero, exit 2 (no "OK")
+    # so bash treats liveness as unknown and falls back to firing.
+    try:
+        await app.async_refresh()
+    except Exception:
+        pass
+    ids = [s.session_id for w in app.windows for t in w.tabs for s in t.sessions]
+    if not ids:
+        os._exit(2)
+    print("OK")
+    for i in ids:
+        print(i)
+try:
+    iterm2.run_until_complete(main, retry=False)
+except SystemExit:
+    raise
+except BaseException:
+    os._exit(1)
+PY
+)
+    # A leading "OK" line means we enumerated successfully (even if zero
+    # sessions); anything else (connect failure / timeout) leaves liveness
+    # unknown and we fall back to firing.
+    if [ "$(printf '%s\n' "$LIVE_SESSIONS" | head -1)" = "OK" ]; then
+        LIVENESS_KNOWN=1
+        LIVE_SESSIONS=$(printf '%s\n' "$LIVE_SESSIONS" | tail -n +2)
+    fi
+fi
+
+# Remove every sidecar marker for a closed session so stale state can't
+# re-trigger and the .state dir self-cleans over time.
+reap_markers() {
+    local u="$1"
+    rm -f "$STATE_DIR/$u.state" "$STATE_DIR/$u.waiting" "$STATE_DIR/$u.notified" \
+          "$STATE_DIR/$u.badge" "$STATE_DIR/$u.precount" 2>/dev/null || true
+}
+
 notify_count=0
 while IFS= read -r state_file; do
     [ -f "$state_file" ] || continue
     uuid=$(basename "$state_file" .state)
+
+    # Liveness gate — if we know the live set and this session isn't in it,
+    # it's a closed tab: reap its stale markers and never notify for it.
+    if [ "$LIVENESS_KNOWN" = "1" ] && ! printf '%s\n' "$LIVE_SESSIONS" | grep -qxF "$uuid"; then
+        reap_markers "$uuid"
+        log_msg "skip+reaped uuid=$uuid reason=not-live"
+        continue
+    fi
 
     # Color check — only orange state files trigger notifications.
     state_content=$(cat "$state_file" 2>/dev/null | head -1)
@@ -138,7 +212,7 @@ while IFS= read -r state_file; do
     : > "$notified_file" 2>/dev/null || true
     log_msg "notified uuid=$uuid label=$label threshold_min=$THRESHOLD_MIN"
     notify_count=$((notify_count + 1))
-done < <(find "$STATE_DIR" -maxdepth 1 -name '*.state' -mmin "+$THRESHOLD_MIN" 2>/dev/null)
+done < <(printf '%s\n' "$candidates")
 
 [ "$notify_count" -gt 0 ] && log_msg "sweep fired=$notify_count threshold_min=$THRESHOLD_MIN"
 exit 0
