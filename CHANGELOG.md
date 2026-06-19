@@ -2,6 +2,10 @@
 
 All notable changes to headsup. Versions follow [semver](https://semver.org/): MINOR for new features and skills, PATCH for fixes, MAJOR for breaking conf/layout changes that require re-running `setup.sh`.
 
+## [0.3.3] - 2026-06-19
+
+- Fix ghost 'Claude is waiting' notifications for closed tabs: notifier now verifies the session is a live iTerm2 tab before firing and reaps stale state markers (headsup-notify-waiting.sh liveness gate)
+
 ## [0.3.2] - 2026-06-17
 
 - Fix apply-once.py runaway that wedged iTerm2: SIGALRM hard timeout (15s) so one-shots can never hang forever on a contended iTerm2 API
