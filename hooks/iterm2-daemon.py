@@ -59,7 +59,14 @@ from pathlib import Path
 import iterm2
 
 
-HOOK_DIR = Path(os.environ.get("HEADSUP_HOOK_DIR", Path(__file__).resolve().parent)).expanduser()
+# NOTE: do NOT use Path(__file__).resolve() here. The installed daemon runs as
+# the symlink ~/.claude/hooks/iterm2-daemon.py -> ../headsup/hooks/...; .resolve()
+# follows that symlink, putting HOOK_DIR (and thus .state, the heartbeat, and the
+# pid lock) in the repo dir, while the watchdog + apply-once + session hook all use
+# ~/.claude/hooks/.state. That split-brain meant the watchdog never saw the
+# heartbeat and respawned the daemon forever. abspath() makes the path absolute
+# WITHOUT following the symlink, matching apply-once.py so all components agree.
+HOOK_DIR = Path(os.environ.get("HEADSUP_HOOK_DIR", Path(os.path.abspath(__file__)).parent)).expanduser()
 STATE_DIR = Path(os.environ.get("HEADSUP_STATE_DIR", HOOK_DIR / ".state")).expanduser()
 PID_FILE = STATE_DIR / "daemon.pid"
 HEARTBEAT_FILE = STATE_DIR / ".daemon.heartbeat"
