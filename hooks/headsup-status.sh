@@ -223,7 +223,7 @@ spawn_oneshot_apply() {
     [ -x "$VENV_PYTHON" ] && [ -f "$ONESHOT_SCRIPT" ] || return 0
     local color="$1" attention="$2" uuid="$3"
     nohup "$VENV_PYTHON" "$ONESHOT_SCRIPT" "$color" "$attention" "$uuid" \
-        >> "$STATE_DIR/oneshot.stderr" 2>&1 < /dev/null &
+        >/dev/null 2>&1 < /dev/null &
     disown 2>/dev/null || true
 }
 
