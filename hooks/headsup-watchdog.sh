@@ -125,7 +125,7 @@ if [ -x "$VENV_PYTHON" ] && [ -f "$ONESHOT_SCRIPT" ]; then
            && [ -n "$uuid" ]; then
             log_msg "tier2-fire uuid=$uuid color=$color attention=$attention"
             nohup "$VENV_PYTHON" "$ONESHOT_SCRIPT" "$color" "$attention" "$uuid" \
-                >> "$STATE_DIR/oneshot.stderr" 2>&1 < /dev/null &
+                >/dev/null 2>&1 < /dev/null &
             disown 2>/dev/null || true
         fi
     done

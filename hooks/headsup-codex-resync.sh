@@ -63,7 +63,7 @@ VENV_PYTHON="$HOOK_DIR/iterm2-venv/bin/python"
 ONESHOT_SCRIPT="$HOOK_DIR/iterm2-apply-once.py"
 if [ -x "$VENV_PYTHON" ] && [ -f "$ONESHOT_SCRIPT" ]; then
     nohup "$VENV_PYTHON" "$ONESHOT_SCRIPT" "$COLOR" "$ATTENTION" "$UUID" \
-        >> "$STATE_DIR/oneshot.stderr" 2>&1 < /dev/null &
+        >/dev/null 2>&1 < /dev/null &
     disown 2>/dev/null || true
 fi
 
