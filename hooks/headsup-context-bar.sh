@@ -62,9 +62,14 @@ eval "$(printf '%s' "$input" | jq -r '
 
 BRANCH=$(git -C "$DIR" branch --show-current 2>/dev/null)
 LABEL=$(basename "$DIR")
-ACCOUNT=$(jq -r '.oauthAccount.emailAddress // empty' ~/.claude.json 2>/dev/null)
+CLAUDE_STATE_FILE="$HOME/.claude.json"
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ] && [ -f "$CLAUDE_CONFIG_DIR/.claude.json" ]; then
+    CLAUDE_STATE_FILE="$CLAUDE_CONFIG_DIR/.claude.json"
+fi
+
+ACCOUNT=$(jq -r '.oauthAccount.emailAddress // empty' "$CLAUDE_STATE_FILE" 2>/dev/null)
 [ -z "$ACCOUNT" ] && ACCOUNT="$(whoami)"
-IS_MAX=$(jq -r '.oauthAccount.organizationType // empty' ~/.claude.json 2>/dev/null)
+IS_MAX=$(jq -r '.oauthAccount.organizationType // empty' "$CLAUDE_STATE_FILE" 2>/dev/null)
 
 # Tilde prefix = estimated at API rates (Max subscription); no tilde = actual charge (API key)
 if [ "$IS_MAX" = "claude_max" ]; then

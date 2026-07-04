@@ -47,6 +47,19 @@ IDLE_COLOR="ffffff"
 PROCESS_COLOR="3a82f5"
 WAIT_COLOR="e67e22"
 
+TERMINAL_PROVIDER=""
+TERMINAL_ID=""
+SESSION_KEY=""
+if [ -n "${AI_POWER_TERM_SESSION_ID:-}${STEVE_TABS_SESSION_ID:-}" ]; then
+    TERMINAL_PROVIDER="ai-power-term"
+    TERMINAL_ID="${AI_POWER_TERM_SESSION_ID:-$STEVE_TABS_SESSION_ID}"
+    SESSION_KEY=$(printf '%s' "apt-$TERMINAL_ID" | tr -c '[:alnum:]-' '_')
+elif [ -n "${ITERM_SESSION_ID:-}" ]; then
+    TERMINAL_PROVIDER="iterm"
+    TERMINAL_ID="${ITERM_SESSION_ID#*:}"
+    SESSION_KEY=$(printf '%s' "$ITERM_SESSION_ID" | tr -c '[:alnum:]-' '_')
+fi
+
 headsup_badge_text() { basename "$PWD"; }
 headsup_title_text() { printf 'Codex · %s' "$1"; }
 
@@ -58,8 +71,7 @@ CONFIG_FILE="$HOOK_DIR/headsup-status.conf"
 # Codex default title unless the per-session config below overrides it.
 headsup_title_text() { printf 'Codex · %s' "$1"; }
 
-if [ -n "${ITERM_SESSION_ID:-}" ]; then
-    SESSION_KEY=$(printf '%s' "$ITERM_SESSION_ID" | tr -c '[:alnum:]-' '_')
+if [ -n "$SESSION_KEY" ]; then
     SESSION_CONFIG_FILE="$HOOK_DIR/headsup-status.d/${SESSION_KEY}.conf"
     # shellcheck source=/dev/null
     [ -f "$SESSION_CONFIG_FILE" ] && source "$SESSION_CONFIG_FILE"
@@ -96,6 +108,22 @@ TARGET_TTY=$(find_parent_tty)
 write_osc() {
     [ -n "$TARGET_TTY" ] || return 0
     printf '%s' "$1" > "$TARGET_TTY" 2>/dev/null || true
+}
+
+post_ai_power_term_event() {
+    local hook_url
+    [ "$TERMINAL_PROVIDER" = "ai-power-term" ] || return 1
+    hook_url="${AI_POWER_TERM_HOOK_URL:-${STEVE_TABS_HOOK_URL:-}}"
+    if [ -z "$hook_url" ] && [ -f "$HOME/.ai-power-term/server.json" ]; then
+        hook_url=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["url"] + "/hook")' "$HOME/.ai-power-term/server.json" 2>/dev/null)
+    fi
+    [ -n "$hook_url" ] || { log_msg "apt-skip reason=no-hook-url"; return 1; }
+    curl -fsS -m 1 -X POST \
+        -H 'Content-Type: application/json' \
+        --data "{\"session_id\":\"$TERMINAL_ID\",\"event\":\"$EVENT\"}" \
+        "$hook_url" >/dev/null 2>&1 || true
+    log_msg "apt-hook event=$EVENT session=$TERMINAL_ID"
+    return 0
 }
 
 attention_for_event() {
@@ -143,7 +171,7 @@ spawn_oneshot_apply() {
     [ -x "$VENV_PYTHON" ] && [ -f "$ONESHOT_SCRIPT" ] || return 0
     local color="$1" attention="$2" uuid="$3"
     nohup "$VENV_PYTHON" "$ONESHOT_SCRIPT" "$color" "$attention" "$uuid" \
-        >/dev/null 2>&1 < /dev/null &
+        >> "$STATE_DIR/oneshot.stderr" 2>&1 < /dev/null &
     disown 2>/dev/null || true
 }
 
@@ -152,8 +180,13 @@ set_tab_color() {
     local attention
     attention=$(attention_for_event "$EVENT")
 
-    [ -n "${ITERM_SESSION_ID:-}" ] || { log_msg "skip color=$color reason=no-session-id"; return 0; }
-    local uuid="${ITERM_SESSION_ID#*:}"
+    if [ "$TERMINAL_PROVIDER" = "ai-power-term" ]; then
+        post_ai_power_term_event
+        return 0
+    fi
+
+    [ -n "$TERMINAL_ID" ] || { log_msg "skip color=$color reason=no-session-id"; return 0; }
+    local uuid="$TERMINAL_ID"
     [ -n "$uuid" ] || { log_msg "skip color=$color reason=bad-session-id"; return 0; }
 
     mkdir -p "$STATE_DIR" 2>/dev/null
@@ -181,9 +214,9 @@ ONESHOT_SCRIPT="$HOOK_DIR/iterm2-apply-once.py"
 HEARTBEAT_FILE="$STATE_DIR/.daemon.heartbeat"
 HEARTBEAT_MAX_AGE_SEC=1
 
-if [ -n "${ITERM_SESSION_ID:-}" ]; then
+if [ -n "$TERMINAL_ID" ]; then
     _badge_for_sidecar=$(headsup_badge_text 2>/dev/null)
-    _uuid_for_sidecar="${ITERM_SESSION_ID#*:}"
+    _uuid_for_sidecar="$TERMINAL_ID"
     if [ -n "$_badge_for_sidecar" ] && [ -n "$_uuid_for_sidecar" ]; then
         mkdir -p "$STATE_DIR" 2>/dev/null
         printf '%s\n' "$_badge_for_sidecar" > "$STATE_DIR/${_uuid_for_sidecar}.badge" 2>/dev/null || true
@@ -195,7 +228,9 @@ case "$EVENT" in
         BADGE=$(headsup_badge_text)
         BADGE_B64=$(printf '%s' "$BADGE" | base64)
         TITLE=$(headsup_title_text "$BADGE")
-        write_osc "$(printf '\033]1337;SetBadgeFormat=%s\007\033]0;%s\007' "$BADGE_B64" "$TITLE")"
+        if [ "$TERMINAL_PROVIDER" = "iterm" ]; then
+            write_osc "$(printf '\033]1337;SetBadgeFormat=%s\007\033]0;%s\007' "$BADGE_B64" "$TITLE")"
+        fi
         set_tab_color "$IDLE_COLOR"
         ;;
     UserPromptSubmit|PreToolUse|PostToolUse|PreCompact|PostCompact|SubagentStart|SubagentStop)

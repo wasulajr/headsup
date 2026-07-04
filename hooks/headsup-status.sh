@@ -71,7 +71,19 @@ log_msg() {
     [ -f "$HOME/.claude/hooks/.debug" ] || return 0
     printf '%s sh %s\n' "$(date -u '+%FT%T.%3NZ' 2>/dev/null || date -u '+%FT%TZ')" "$1" >> "$LOG_FILE" 2>/dev/null || true
 }
-log_msg "fire event=$EVENT session=${ITERM_SESSION_ID:-unset} ppid=$PPID"
+TERMINAL_PROVIDER=""
+TERMINAL_ID=""
+TERMINAL_SESSION_KEY=""
+if [ -n "${ITERM_SESSION_ID:-}" ]; then
+    TERMINAL_PROVIDER="iterm"
+    TERMINAL_ID="${ITERM_SESSION_ID#*:}"
+    TERMINAL_SESSION_KEY=$(printf '%s' "$ITERM_SESSION_ID" | tr -c '[:alnum:]-' '_')
+elif [ -n "${WEZTERM_PANE:-}" ]; then
+    TERMINAL_PROVIDER="wezterm"
+    TERMINAL_ID="wezterm-${WEZTERM_PANE}"
+    TERMINAL_SESSION_KEY=$(printf '%s' "$TERMINAL_ID" | tr -c '[:alnum:]-' '_')
+fi
+log_msg "fire event=$EVENT provider=${TERMINAL_PROVIDER:-unset} terminal=${TERMINAL_ID:-unset} ppid=$PPID"
 
 # Defaults — every value here can be overridden in the conf file below.
 IDLE_COLOR="ffffff"     # white  — fresh session / idle
@@ -85,9 +97,8 @@ CONFIG_FILE="$HOME/.claude/hooks/headsup-status.conf"
 # shellcheck source=/dev/null
 [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
 
-if [ -n "$ITERM_SESSION_ID" ]; then
-    SESSION_KEY=$(printf '%s' "$ITERM_SESSION_ID" | tr -c '[:alnum:]-' '_')
-    SESSION_CONFIG_FILE="$HOME/.claude/hooks/headsup-status.d/${SESSION_KEY}.conf"
+if [ -n "$TERMINAL_SESSION_KEY" ]; then
+    SESSION_CONFIG_FILE="$HOME/.claude/hooks/headsup-status.d/${TERMINAL_SESSION_KEY}.conf"
     # shellcheck source=/dev/null
     [ -f "$SESSION_CONFIG_FILE" ] && source "$SESSION_CONFIG_FILE"
 fi
@@ -119,9 +130,9 @@ STATE_DIR="$HOME/.claude/hooks/.state"
 # show a friendly project name instead of a raw UUID — and so existing
 # tabs that started before this code existed also pick up a sidecar
 # on their next event. The write is cheap (<50 bytes) and idempotent.
-if [ -n "$ITERM_SESSION_ID" ]; then
+if [ -n "$TERMINAL_ID" ]; then
     _badge_for_sidecar=$(headsup_badge_text 2>/dev/null)
-    _uuid_for_sidecar="${ITERM_SESSION_ID#*:}"
+    _uuid_for_sidecar="$TERMINAL_ID"
     if [ -n "$_badge_for_sidecar" ] && [ -n "$_uuid_for_sidecar" ]; then
         mkdir -p "$STATE_DIR" 2>/dev/null
         printf '%s\n' "$_badge_for_sidecar" > "$STATE_DIR/${_uuid_for_sidecar}.badge" 2>/dev/null || true
@@ -165,6 +176,14 @@ attention_for_event() {
     case "$1" in
         Notification|Stop|PreToolUseWaitForUser) printf 'yes' ;;
         *)                                        printf 'no'  ;;
+    esac
+}
+
+state_for_event() {
+    case "$1" in
+        SessionStart)                              printf 'idle' ;;
+        Notification|Stop|PreToolUseWaitForUser)  printf 'waiting' ;;
+        *)                                        printf 'processing' ;;
     esac
 }
 
@@ -227,14 +246,35 @@ spawn_oneshot_apply() {
     disown 2>/dev/null || true
 }
 
+osc_b64() {
+    printf '%s' "$1" | base64 | tr -d '\n'
+}
+
+set_wezterm_user_var() {
+    local name="$1" value="$2" value_b64
+    value_b64=$(osc_b64 "$value")
+    write_osc "$(printf '\033]1337;SetUserVar=%s=%s\007' "$name" "$value_b64")"
+}
+
+emit_wezterm_state() {
+    local state="$1" color="$2" attention="$3" label
+    label=$(headsup_badge_text 2>/dev/null)
+    [ -n "$label" ] || label=$(basename "$PWD")
+    write_osc "$(printf '\033]0;%s\007' "$label")"
+    set_wezterm_user_var "headsup_state" "$state"
+    set_wezterm_user_var "headsup_color" "$color"
+    set_wezterm_user_var "headsup_attention" "$attention"
+    set_wezterm_user_var "headsup_label" "$label"
+    log_msg "wezterm-uservars state=$state color=$color attention=$attention label=$label"
+}
+
 set_tab_color() {
     local color="$1"
     local attention
     attention=$(attention_for_event "$EVENT")
 
-    [ -n "$ITERM_SESSION_ID" ] || { log_msg "skip color=$color reason=no-session-id"; return 0; }
-    local uuid="${ITERM_SESSION_ID#*:}"
-    [ -n "$uuid" ] || { log_msg "skip color=$color reason=bad-session-id"; return 0; }
+    [ -n "$TERMINAL_ID" ] || { log_msg "skip color=$color reason=no-terminal-id"; return 0; }
+    local uuid="$TERMINAL_ID"
 
     # ── Tier 1: state file → persistent daemon ──────────────────────────
     mkdir -p "$STATE_DIR" 2>/dev/null
@@ -243,6 +283,12 @@ set_tab_color() {
     local final="$STATE_DIR/${uuid}.state"
     printf '%s %s\n' "$color" "$attention" > "$tmp" 2>/dev/null && mv "$tmp" "$final" 2>/dev/null
     log_msg "state color=$color attention=$attention uuid=$uuid"
+
+    if [ "$TERMINAL_PROVIDER" = "wezterm" ]; then
+        emit_wezterm_state "$(state_for_event "$EVENT")" "$color" "$attention"
+        return 0
+    fi
+
     ensure_daemon_running
 
     # ── Tier 3: direct OSC to parent tty (always, best-effort) ──────────
@@ -315,10 +361,7 @@ write_osc() {
 # Rule: PostToolUse → if there's a waiting marker AND no in-flight tools
 # (count == 0), suppress (case A). Otherwise, set blue (case B or the
 # normal between-tools case).
-MARKER_UUID=""
-if [ -n "${ITERM_SESSION_ID:-}" ]; then
-    MARKER_UUID="${ITERM_SESSION_ID#*:}"
-fi
+MARKER_UUID="$TERMINAL_ID"
 WAITING_MARKER=""
 PRECOUNT_FILE=""
 if [ -n "$MARKER_UUID" ]; then
@@ -363,10 +406,12 @@ case "$EVENT" in
     SessionStart)
         clear_waiting_marker
         write_precount 0
-        BADGE=$(headsup_badge_text)
-        BADGE_B64=$(printf '%s' "$BADGE" | base64)
-        TITLE=$(headsup_title_text "$BADGE")
-        write_osc "$(printf '\033]1337;SetBadgeFormat=%s\007\033]0;%s\007' "$BADGE_B64" "$TITLE")"
+        if [ "$TERMINAL_PROVIDER" = "iterm" ]; then
+            BADGE=$(headsup_badge_text)
+            BADGE_B64=$(printf '%s' "$BADGE" | base64)
+            TITLE=$(headsup_title_text "$BADGE")
+            write_osc "$(printf '\033]1337;SetBadgeFormat=%s\007\033]0;%s\007' "$BADGE_B64" "$TITLE")"
+        fi
         # (Badge sidecar gets written above for every event; no per-Case
         # logic needed here.)
         set_tab_color "$IDLE_COLOR"

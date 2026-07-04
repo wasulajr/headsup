@@ -6,7 +6,7 @@
 # does NOT modify anything.
 #
 # Sections:
-#   - Daemon       : PID alive, heartbeat age + status
+#   - Daemon       : iTerm2 daemon PID alive, heartbeat age + status
 #   - Watchdog     : LaunchAgent registration + last exit
 #   - Sessions     : known sessions (active in last hour) and their colors
 #   - Suppressions : count of stray PostToolUse events suppressed (24h)
@@ -45,7 +45,7 @@ if [ -f "$DISABLED_FLAG" ]; then
 fi
 
 # ── Daemon ────────────────────────────────────────────────────────────────
-hdr "Daemon"
+hdr "iTerm2 Daemon"
 daemon_pid=""
 if [ -f "$PID_FILE" ]; then
     daemon_pid=$(cat "$PID_FILE" 2>/dev/null)
@@ -111,7 +111,14 @@ if [ -d "$STATE_DIR" ]; then
                 e67e22)        human="waiting (orange)" ;;
                 ffcc00)        human="waiting (yellow)" ;;
             esac
+            provider="iTerm"
             short_uuid="${uuid:0:8}"
+            case "$uuid" in
+                wezterm-*)
+                    provider="WezTerm"
+                    short_uuid="wez:${uuid#wezterm-}"
+                    ;;
+            esac
             waiting_marker=""
             [ -f "$STATE_DIR/${uuid}.waiting" ] && waiting_marker=" [waiting-marker]"
             precount=""
@@ -119,7 +126,7 @@ if [ -d "$STATE_DIR" ]; then
                 pc=$(cat "$STATE_DIR/${uuid}.precount" 2>/dev/null | head -1)
                 [ -n "$pc" ] && [ "$pc" != "0" ] && precount=" [in-flight=$pc]"
             fi
-            dim "$short_uuid → $human${waiting_marker}${precount}"
+            dim "$short_uuid [$provider] → $human${waiting_marker}${precount}"
         else
             stale=$((stale+1))
         fi
