@@ -4,7 +4,7 @@ All notable changes to headsup. Versions follow [semver](https://semver.org/): M
 
 ## [0.3.4] - 2026-06-19
 
-- Fix daemon state-dir split-brain (#25): daemon no longer resolves its install symlink, so its heartbeat/pid/state land in ~/.claude/hooks/.state where the watchdog reads — ends the endless daemon respawn + Tier 2 fan-out and restores the fast color path
+- Fix daemon state-dir split-brain (#25): daemon no longer resolves its install symlink, so its heartbeat/pid/state land in ~/.claude/hooks/.state where the watchdog reads. Ends the endless daemon respawn + Tier 2 fan-out and restores the fast color path
 
 ## [0.3.3] - 2026-06-19
 

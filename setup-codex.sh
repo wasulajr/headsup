@@ -111,6 +111,8 @@ for name in \
     headsup-codex-set-label.sh \
     headsup-codex-resync.sh \
     headsup-codex-status-report.sh \
+    headsup-codex-utilization.mjs \
+    headsup-codex-utilization-report.mjs \
     headsup-codex-diagnose.sh \
     headsup-codex-notifications.sh \
     headsup-codex-notify-waiting.sh \
@@ -234,6 +236,24 @@ else
     warn "Quick Action bundle missing at $QA_SRC — skipping"
 fi
 
+header "Step 6b/7 — installing Codex headsup shell commands"
+
+LOCAL_BIN="$HOME/.local/bin"
+mkdir -p "$LOCAL_BIN"
+for name in headsup-label; do
+    src="$SCRIPT_DIR/codex-bin/$name"
+    dst="$LOCAL_BIN/$name"
+    [ -f "$src" ] || fatal "missing source file: $src"
+    if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+        ok "$name ${DIM}(identical, skipped)${RST}"
+    else
+        [ -f "$dst" ] && cp "$dst" "$dst.bak"
+        cp "$src" "$dst"
+        chmod +x "$dst"
+        ok "$name installed into $LOCAL_BIN"
+    fi
+done
+
 header "Step 7/7 — wiring Codex hooks into $HOOKS_JSON"
 
 HOOK_WIRING=$(cat <<'JSON'
@@ -241,59 +261,89 @@ HOOK_WIRING=$(cat <<'JSON'
   "SessionStart": [
     {
       "matcher": "startup|resume|clear|compact",
-      "hooks": [{ "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" SessionStart", "timeout": 5 }]
+      "hooks": [
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" SessionStart", "timeout": 5 },
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-utilization.mjs\" SessionStart", "timeout": 5 }
+      ]
     }
   ],
   "UserPromptSubmit": [
     {
-      "hooks": [{ "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" UserPromptSubmit", "timeout": 5 }]
+      "hooks": [
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" UserPromptSubmit", "timeout": 5 },
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-utilization.mjs\" UserPromptSubmit", "timeout": 5 }
+      ]
     }
   ],
   "PreToolUse": [
     {
       "matcher": "*",
-      "hooks": [{ "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" PreToolUse", "timeout": 5 }]
+      "hooks": [
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" PreToolUse", "timeout": 5 },
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-utilization.mjs\" PreToolUse", "timeout": 5 }
+      ]
     }
   ],
   "PermissionRequest": [
     {
       "matcher": "*",
-      "hooks": [{ "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" PermissionRequest", "timeout": 5 }]
+      "hooks": [
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" PermissionRequest", "timeout": 5 },
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-utilization.mjs\" PermissionRequest", "timeout": 5 }
+      ]
     }
   ],
   "PostToolUse": [
     {
       "matcher": "*",
-      "hooks": [{ "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" PostToolUse", "timeout": 5 }]
+      "hooks": [
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" PostToolUse", "timeout": 5 },
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-utilization.mjs\" PostToolUse", "timeout": 5 }
+      ]
     }
   ],
   "PreCompact": [
     {
       "matcher": "manual|auto",
-      "hooks": [{ "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" PreCompact", "timeout": 5 }]
+      "hooks": [
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" PreCompact", "timeout": 5 },
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-utilization.mjs\" PreCompact", "timeout": 5 }
+      ]
     }
   ],
   "PostCompact": [
     {
       "matcher": "manual|auto",
-      "hooks": [{ "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" PostCompact", "timeout": 5 }]
+      "hooks": [
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" PostCompact", "timeout": 5 },
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-utilization.mjs\" PostCompact", "timeout": 5 }
+      ]
     }
   ],
   "SubagentStart": [
     {
       "matcher": "*",
-      "hooks": [{ "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" SubagentStart", "timeout": 5 }]
+      "hooks": [
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" SubagentStart", "timeout": 5 },
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-utilization.mjs\" SubagentStart", "timeout": 5 }
+      ]
     }
   ],
   "SubagentStop": [
     {
       "matcher": "*",
-      "hooks": [{ "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" SubagentStop", "timeout": 5 }]
+      "hooks": [
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" SubagentStop", "timeout": 5 },
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-utilization.mjs\" SubagentStop", "timeout": 5 }
+      ]
     }
   ],
   "Stop": [
     {
-      "hooks": [{ "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" Stop", "timeout": 5 }]
+      "hooks": [
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-status.sh\" Stop", "timeout": 5 },
+        { "type": "command", "command": "\"$HOME/.codex/hooks/headsup-codex-utilization.mjs\" Stop", "timeout": 5 }
+      ]
     }
   ]
 }
@@ -301,7 +351,8 @@ JSON
 )
 
 if [ -f "$HOOKS_JSON" ]; then
-    if jq -e '.. | strings | select(test("headsup-codex-status.sh"))' "$HOOKS_JSON" >/dev/null 2>&1; then
+    if jq -e '.. | strings | select(test("headsup-codex-status.sh"))' "$HOOKS_JSON" >/dev/null 2>&1 \
+        && jq -e '.. | strings | select(test("headsup-codex-utilization.mjs"))' "$HOOKS_JSON" >/dev/null 2>&1; then
         ok "Codex hooks already wired in $HOOKS_JSON"
     else
         cp "$HOOKS_JSON" "$HOOKS_JSON.bak"

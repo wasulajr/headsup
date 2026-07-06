@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    cat <<'EOF'
+Usage:
+  headsup-label "label text"
+  headsup-label --clear
+
+Sets or clears the current Codex tab label/title/badge/watermark.
+EOF
+    exit 0
+fi
+
+exec "$HOME/.codex/hooks/headsup-codex-set-label.sh" "$@"
