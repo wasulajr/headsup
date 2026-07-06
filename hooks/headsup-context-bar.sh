@@ -51,6 +51,7 @@ eval "$(printf '%s' "$input" | jq -r '
    end) as $pct |
   [
     "MODEL=" + (.model.display_name // "Claude" | @sh),
+    "MODEL_ID=" + ((.model.id // .model.name // .model.model // .model.display_name // "Claude") | @sh),
     "COST="  + (.cost.total_cost_usd // 0 | tostring),
     "SESSION=" + (.session_id // "default" | @sh),
     "DIR="   + (.workspace.current_dir // "." | @sh),
@@ -88,6 +89,108 @@ SESSION_RESET=""
 if [ -f "$USAGE_WINDOWS_SCRIPT" ]; then
     eval "$(python3 "$USAGE_WINDOWS_SCRIPT" 2>/dev/null)" 2>/dev/null || true
 fi
+
+capture_sfl_model() {
+    local session_key="${AI_POWER_TERM_SESSION_ID:-${STEVE_TABS_SESSION_ID:-${ITERM_SESSION_ID:-$SESSION}}}"
+    local model_value="${MODEL_ID:-$MODEL}"
+    [ -n "$session_key" ] || return 0
+    [ -n "$model_value" ] || return 0
+    local model_dir="$HOME/.claude/sfl/model"
+    local mkey
+    mkey=$(printf '%s' "$session_key" | tr -c '[:alnum:]-' '_')
+    mkdir -p "$model_dir"
+    printf '%s\n' "$model_value" > "$model_dir/$mkey.model"
+}
+
+capture_sfl_model
+
+post_ai_power_term_statusline() {
+    local session_id="${AI_POWER_TERM_SESSION_ID:-${STEVE_TABS_SESSION_ID:-}}"
+    local hook_url="${AI_POWER_TERM_HOOK_URL:-${STEVE_TABS_HOOK_URL:-}}"
+    [ -n "$session_id" ] || return 0
+    [ -n "$hook_url" ] || return 0
+    python3 - "$hook_url" "$session_id" "$ACCOUNT" "$MODEL" "$DIR" "$BRANCH" "$PCT" "$TOKENS" "$CTX_SIZE" \
+        "$SESSION_PCT" "$SESSION_USED" "$SESSION_LIMIT_FMT" "$SESSION_COST" \
+        "$WEEK_PCT" "$WEEK_USED" "$WEEK_LIMIT_FMT" "$WEEK_COST" "$COST_LABEL" <<'PY' >/dev/null 2>&1 || true
+import json
+import sys
+import time
+import urllib.request
+
+(
+    hook_url,
+    session_id,
+    account,
+    model,
+    cwd,
+    branch,
+    context_percent,
+    context_tokens,
+    context_size,
+    session_percent,
+    session_used,
+    session_limit,
+    session_cost,
+    week_percent,
+    week_used,
+    week_limit,
+    week_cost,
+    cost_label,
+) = sys.argv[1:19]
+
+
+def maybe_int(value):
+    try:
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def maybe_float(value):
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def add_if(payload, key, value):
+    if value not in (None, ""):
+        payload[key] = value
+
+
+status = {
+    "kind": "claude",
+    "source": "claude-statusLine",
+    "account": account,
+    "accountEmail": account if "@" in account else "",
+    "model": model,
+    "cwd": cwd,
+    "updatedAt": time.time(),
+}
+add_if(status, "branch", branch)
+add_if(status, "contextPercent", maybe_int(context_percent))
+add_if(status, "contextTokens", maybe_int(context_tokens))
+add_if(status, "contextSize", maybe_int(context_size))
+add_if(status, "sessionPercent", maybe_int(session_percent))
+add_if(status, "sessionUsed", session_used)
+add_if(status, "sessionLimit", session_limit)
+add_if(status, "sessionCost", maybe_float(session_cost))
+add_if(status, "weekPercent", maybe_int(week_percent))
+add_if(status, "weekUsed", week_used)
+add_if(status, "weekLimit", week_limit)
+add_if(status, "weekCost", maybe_float(week_cost))
+add_if(status, "costLabel", cost_label)
+
+body = json.dumps({"session_id": session_id, "statusLine": status}, separators=(",", ":")).encode()
+request = urllib.request.Request(
+    hook_url,
+    data=body,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+urllib.request.urlopen(request, timeout=0.5).close()
+PY
+}
 
 # ── macOS notification — mirrors headsup-notify-waiting.sh's fire_notification
 # Uses the bundled Swift notifier (custom icon) with osascript as fallback.
@@ -156,4 +259,5 @@ if [ -n "$WEEK_PCT" ]; then
 fi
 LINE+="  Cost: ${DIM}${COST_LABEL}${RESET}"
 [ -n "$BRANCH" ] && LINE+="  ${DIM}⎇ ${BRANCH}${RESET}"
+post_ai_power_term_statusline
 printf '%s' "$LINE"

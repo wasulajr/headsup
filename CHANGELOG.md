@@ -2,9 +2,19 @@
 
 All notable changes to headsup. Versions follow [semver](https://semver.org/): MINOR for new features and skills, PATCH for fixes, MAJOR for breaking conf/layout changes that require re-running `setup.sh`.
 
+## [0.4.0] - 2026-07-06
+
+- Multi-terminal support: iTerm2, WezTerm, and AI Power Term. Status colors, labels, the status bar, status-report, and /nil auto-detect the active terminal (ITERM_SESSION_ID / WEZTERM_PANE / AI_POWER_TERM_SESSION_ID) and drive each one natively.
+- WezTerm: new wezterm/wezterm.lua renders tab colors and labels from headsup user vars via format-tab-title.
+- AI Power Term: labels and tab titles applied through the app server's websocket rename; the Claude status bar posts its segments to the app server; provider-aware /headsup-label. No AI Power Term code lives in the repo (integration is over its local /hook + /ws protocol).
+- New /headsup skill: default read-only overview that routes to the focused headsup commands (twelve skills total).
+- Codex utilization tracking: headsup-codex-utilization.mjs records session and week token usage for Codex, wired into setup-codex.sh; installs a headsup-label CLI shim on ~/.local/bin.
+- Fixes: context bar honors CLAUDE_CONFIG_DIR and captures the active model for /sfl; the Codex one-shot badge apply no longer leaks stderr; status report labels each session by terminal provider.
+- Docs: new multi-terminal section and support table, updated requirements, repo tree (wezterm/, codex-bin/, Codex utilization hooks, /headsup skill), and the twelve-skills reference now documents /headsup and /headsup-config.
+
 ## [0.3.4] - 2026-06-19
 
-- Fix daemon state-dir split-brain (#25): daemon no longer resolves its install symlink, so its heartbeat/pid/state land in ~/.claude/hooks/.state where the watchdog reads — ends the endless daemon respawn + Tier 2 fan-out and restores the fast color path
+- Fix daemon state-dir split-brain (#25): daemon no longer resolves its install symlink, so its heartbeat/pid/state land in ~/.claude/hooks/.state where the watchdog reads. Ends the endless daemon respawn + Tier 2 fan-out and restores the fast color path
 
 ## [0.3.3] - 2026-06-19
 

@@ -1,12 +1,22 @@
 # headsup
 
-Run a fleet of Claude Code tabs without losing track of a single one. headsup makes every tab's state glanceable in iTerm2, tells you how close you are to Anthropic usage limits before throttling, checkpoints any window for later with `/sfl`, and restores the whole fleet where it left off with `/nil`.
+Run a fleet of Claude Code tabs without losing track of a single one. headsup makes every tab's state glanceable in iTerm2, WezTerm, or AI Power Term, tells you how close you are to Anthropic usage limits before throttling, checkpoints any window for later with `/sfl`, and restores the whole fleet where it left off with `/nil`.
 
 Twenty tabs deep. You hear the Dock bounce. You glance at the tab bar. One tab is orange. That's [Claude Code](https://claude.com/claude-code) asking you a question. You switch over, answer it, watch it turn blue again, move on. And when you shut the lid for the night, `/sfl` saves each window's state. The next morning, one `/nil` reopens every saved window in its own labeled tab, and each one catches itself up and asks what's next.
 
 ![/nil restoring a fleet of saved Claude Code tabs](docs/nil-demo.gif)
 
-Under the hood: Claude Code hooks, Codex hooks, a persistent iTerm2 daemon, a launchd watchdog, a tiny notifier `.app` for macOS notifications, a live status bar that surfaces session and weekly quota consumption in real time, and eleven companion skills you can run from any Claude session (including a ⌘⌥C Finder Quick Action that opens a new labeled Claude tab from any folder). macOS and iTerm2 only. One-line install for Claude, separate opt-in install for Codex.
+Under the hood: Claude Code hooks, Codex hooks, a persistent iTerm2 daemon, a launchd watchdog, a tiny notifier `.app` for macOS notifications, a live status bar that surfaces session and weekly quota consumption in real time, and twelve companion skills you can run from any Claude session (including a ⌘⌥C Finder Quick Action that opens a new labeled Claude tab from any folder). macOS only, with native support for iTerm2, WezTerm, and AI Power Term. One-line install for Claude, separate opt-in install for Codex.
+
+**Terminal support.** headsup started on iTerm2 and now drives three terminals from one codebase. Every session hook auto-detects the active terminal (`ITERM_SESSION_ID`, `WEZTERM_PANE`, or `AI_POWER_TERM_SESSION_ID`) and applies state the native way for each:
+
+| Terminal | Tab color | Label / title | Status bar | `/nil` reopen |
+|----------|-----------|---------------|------------|---------------|
+| iTerm2 | daemon over the Python API | OSC badge + title | full | AppleScript |
+| WezTerm | `format-tab-title` from user vars (`wezterm/wezterm.lua`) | user-var label | full | `wezterm cli` |
+| AI Power Term | app server state | websocket rename | full (posted to the app server) | app server |
+
+Set up WezTerm by pointing your config at (or copying from) `wezterm/wezterm.lua`. AI Power Term is a separate app; headsup talks to it over the local protocol it injects (`AI_POWER_TERM_HOOK_URL` plus a `/hook` POST and a `/ws` websocket), so no AI Power Term code lives in this repo.
 
 ## The three capabilities
 
@@ -70,8 +80,8 @@ After the script finishes:
 
 Prerequisites (`setup.sh` checks all of these and tells you the exact `brew install` command for anything missing):
 
-- macOS (the daemon uses iTerm2's Python API — no Linux or Windows support)
-- [iTerm2](https://iterm2.com/): `brew install --cask iterm2`
+- macOS (the color path is delivered natively per terminal: no Linux or Windows support)
+- A supported terminal: [iTerm2](https://iterm2.com/) (`brew install --cask iterm2`), [WezTerm](https://wezterm.org/) (`brew install --cask wezterm`), or AI Power Term. iTerm2 is the default and the most fully exercised.
 - [Claude Code](https://claude.com/claude-code)
 - Python 3.9+: `brew install python@3.12`
 - jq: `brew install jq`
@@ -149,7 +159,7 @@ The cost figures are API-equivalent: each JSONL entry's token counts are weighte
 
 ### Context window percentage accuracy
 
-The context window percentage the status bar displays uses the API-provided `used_percentage` when present. When that field is absent, it falls back to a manual calculation that includes input tokens, cache creation tokens, cache read tokens, AND output tokens — all four token types count against the context window. This matches what Claude Code's own toolbar shows and fixes a common under-reporting bug in earlier implementations that excluded output tokens.
+The context window percentage the status bar displays uses the API-provided `used_percentage` when present. When that field is absent, it falls back to a manual calculation that includes input tokens, cache creation tokens, cache read tokens, AND output tokens: all four token types count against the context window. This matches what Claude Code's own toolbar shows and fixes a common under-reporting bug in earlier implementations that excluded output tokens.
 
 ### Notifier .app
 
@@ -166,9 +176,9 @@ To swap the icon: drop a 1024x1024 PNG at `notifier-app/icon-source.png`, run `.
 
 Honest list, so you know before installing:
 
-- **macOS + iTerm2 only.** The daemon uses iTerm2's Python API; badge and title use iTerm2-proprietary OSC sequences. No Linux, Windows, or Terminal.app support.
-- **`/nil` needs iTerm2 running and macOS Automation permission** (the first run triggers a prompt; if denied, re-enable under System Settings > Privacy & Security > Automation). It also needs `claude` on the login-shell PATH.
-- **The Codex port covers status colors and labels, not yet `/sfl` and `/nil`.** Those depend on Claude Code skills, allow rules, and resume prompts. Codex parity is on the roadmap.
+- **macOS only.** No Linux, Windows, or Terminal.app support. Coverage differs by terminal: iTerm2 is the most fully exercised (daemon over the Python API, OSC badge and title); WezTerm and AI Power Term are supported for colors, labels, the status bar, and `/nil`, and are newer.
+- **`/nil` needs the active terminal running plus a way to open a tab in it.** On iTerm2 that is macOS Automation permission (the first run triggers a prompt; if denied, re-enable under System Settings > Privacy & Security > Automation); on WezTerm the `wezterm` CLI; on AI Power Term the app server. It also needs `claude` on the login-shell PATH.
+- **The Codex port covers status colors, labels, and utilization tracking, not yet `/sfl` and `/nil`.** Those depend on Claude Code skills, allow rules, and resume prompts. Codex parity is on the roadmap.
 - **Quota numbers are estimates.** The session and week limits are reverse-engineered from Claude Code's own `/status` dialog and match it in practice, but both are approximate.
 - **Not supported software.** Bugs and ideas welcome at https://github.com/wasulajr/headsup/issues.
 
@@ -176,6 +186,7 @@ Honest list, so you know before installing:
 
 - **Coordination layer.** Deploy locks and a multi-window status board for fleets where several agent windows share environments (single-writer deploy targets, who-holds-what visibility, takeover logging).
 - **Codex parity for `/sfl` and `/nil`.**
+- **Deeper WezTerm and AI Power Term parity** as those paths get the same real-world mileage iTerm2 has.
 
 ---
 
@@ -205,9 +216,9 @@ Honest list, so you know before installing:
 | Threshold | Notification |
 |-----------|-------------|
 | 90% | Run /compact to avoid losing context |
-| 95% | Compact soon — context almost full |
-| 97% | Compact immediately — context nearly gone |
-| 99% | Compact NOW — you are about to lose context |
+| 95% | Compact soon, context almost full |
+| 97% | Compact immediately, context nearly gone |
+| 99% | Compact NOW, you are about to lose context |
 
 **Session and week thresholds are configurable** in `headsup-status.conf`:
 ```bash
@@ -223,12 +234,14 @@ headsup/
 ├── setup.sh                              # Claude Code installer (idempotent, safe to re-run)
 ├── setup-codex.sh                        # Codex CLI installer (idempotent, safe to re-run)
 ├── hooks/
-│   ├── headsup-status.sh                 # bash entry point — Claude Code hooks call this
-│   ├── headsup-codex-status.sh           # bash entry point — Codex hooks call this
+│   ├── headsup-status.sh                 # bash entry point: Claude Code hooks call this
+│   ├── headsup-codex-status.sh           # bash entry point: Codex hooks call this
 │   ├── headsup-status.conf               # color + badge defaults (edit to customize)
 │   ├── headsup-context-bar.sh            # statusLine hook: account, model, context, quotas, cost
 │   ├── headsup-usage-windows.py          # JSONL aggregator for session/week token counts and cost
 │   ├── headsup-session-cost.py           # per-session token aggregator for /headsup-status
+│   ├── headsup-codex-utilization.mjs     # Codex session/week token tracking (Codex hooks)
+│   ├── headsup-codex-utilization-report.mjs  # Codex utilization status line renderer
 │   ├── headsup-update.sh                 # pull latest from GitHub (/headsup-update)
 │   ├── headsup-resync.sh                 # force-resync a drifted tab (/headsup-resync-tab)
 │   ├── headsup-set-label.sh              # set/clear the per-session label (/headsup-label + Quick Action)
@@ -240,14 +253,18 @@ headsup/
 │   ├── headsup-notify-waiting.sh         # fires macOS notification when a tab waits too long
 │   ├── headsup-notifications.sh          # /headsup-notifications skill helper
 │   ├── headsup-notifications.conf        # notifier config (enabled / threshold / sound)
-│   ├── iterm2-daemon.py                  # persistent daemon — holds the iTerm2 websocket
+│   ├── iterm2-daemon.py                  # persistent daemon: holds the iTerm2 websocket
 │   ├── iterm2-apply-once.py              # one-shot fallback when the daemon is unavailable
 │   └── iterm2-set-tab-color.py           # ad-hoc testing helper
+├── wezterm/
+│   └── wezterm.lua                       # WezTerm tab-color + label rendering (format-tab-title)
+├── codex-bin/
+│   └── headsup-label                     # Codex label CLI shim (installed to ~/.local/bin)
 ├── sfl/
 │   └── lib/
 │       ├── window-id.sh                  # resolve this window's label/slug/cwd (/sfl)
 │       ├── sfl-entry.sh                  # write/archive live checkpoint entries (/sfl)
-│       └── nil-open.sh                   # open one iTerm2 tab per saved window (/nil)
+│       └── nil-open.sh                   # open one tab per saved window in the active terminal (/nil)
 ├── launchagents/
 │   └── claude-code.headsup-watchdog.plist.template
 ├── notifier-app/
@@ -257,6 +274,7 @@ headsup/
 │   ├── build-notifier.sh
 │   └── build-icon.sh
 └── skills/
+    ├── headsup/                   # /headsup                   default health/status overview
     ├── sfl/                       # /sfl                       save this window for later
     ├── nil/                       # /nil                       reopen every saved window
     ├── headsup-colors/            # /headsup-colors            change idle/working/waiting colors
@@ -295,9 +313,13 @@ Codex color mapping:
 | `PreCompact` / `PostCompact` | blue | no | Codex is compacting context |
 | `SubagentStart` / `SubagentStop` | blue | no | A subagent is active or returning |
 
-Codex support also installs Codex-native headsup skills, wait notifications, `$headsup-colors`, `$headsup-status`, `$headsup-diagnose`, `$headsup-label`, `$headsup-resync-tab`, `$headsup-update`, and a New Codex Tab Quick Action. Claude-only features are the Anthropic quota estimates, Claude JSONL cost aggregation, Claude statusLine hook, the New Claude Tab Quick Action, and the `/sfl` + `/nil` window lifecycle skills.
+Codex support also installs Codex-native headsup skills, wait notifications, `$headsup-colors`, `$headsup-status`, `$headsup-diagnose`, `$headsup-label`, `$headsup-resync-tab`, `$headsup-update`, and a New Codex Tab Quick Action. It tracks Codex session and week token utilization (`headsup-codex-utilization.mjs`, wired into the Codex lifecycle hooks) and installs a `headsup-label` CLI shim into `~/.local/bin` so you can relabel a Codex tab from any shell. Claude-only features are the Anthropic quota estimates, Claude JSONL cost aggregation, Claude statusLine hook, the New Claude Tab Quick Action, and the `/sfl` + `/nil` window lifecycle skills.
 
-### Ten skills you can run from any Claude Code session
+### Twelve skills you can run from any Claude Code session
+
+#### `/headsup`: default overview
+
+The bare `/headsup` command runs the read-only status report and routes you to the focused commands below. Use it when you want the quick "is this working" snapshot without remembering which specific skill to call.
 
 #### `/sfl`: save this window for later
 
@@ -346,7 +368,7 @@ The script also handles reverting: `~/.claude/hooks/headsup-set-label.sh --clear
 
 Select a folder in Finder, press **⌘⌥C**: a new iTerm2 tab opens, you're asked for a label (defaults to the folder name; applied as tab title + badge via `headsup-set-label.sh`), then it `cd`s into the folder and launches `claude`.
 
-`setup.sh` installs the Quick Action automatically (step 8) and `/headsup-update` keeps it current, so the skill itself is the manual install/repair/removal path — run it when the hotkey stopped working, the Quick Action vanished from Finder's menu, or you want a different key combo.
+`setup.sh` installs the Quick Action automatically (step 8) and `/headsup-update` keeps it current, so the skill itself is the manual install/repair/removal path. Run it when the hotkey stopped working, the Quick Action vanished from Finder's menu, or you want a different key combo.
 
 Configuration notes:
 
@@ -362,6 +384,17 @@ Configuration notes:
 - **First run**: macOS asks to allow the Service to control iTerm2. Click OK. If you denied it, re-enable under System Settings, Privacy & Security, Automation.
 - **Skipping the label**: click Skip (or leave the field empty) and the tab opens with the normal headsup default label.
 - **Removal**: delete `~/Library/Services/New Claude Tab.workflow` and run `/System/Library/CoreServices/pbs -flush`.
+
+#### `/headsup-config`: settings hub
+
+One command for every headsup setting, with a section as the first word: `newtabs` / `codextabs` (New Tab launch mode), `colors` (idle/working/waiting), `label` (this tab's title + badge), `notify` (the wait notification). With no section it prints every current setting.
+
+```bash
+/headsup-config                 # show all current settings
+/headsup-config colors wait orange
+/headsup-config newtabs off
+/headsup-config notify 10
+```
 
 #### `/headsup-resync-tab`: fix a stuck tab
 
@@ -475,7 +508,7 @@ Run `/headsup-resync-tab`. Sends `RequestAttention=no` paired with the correct c
 
 #### "Notifications show the wrong icon"
 
-Most likely the notifier `.app` wasn't built. Re-run `setup.sh` and watch the Step 5 output. If `swiftc` is missing: `xcode-select --install`. If macOS silently denied notification permission before the icon was in place, go to System Settings, Notifications, find headsup, and flip it to Allow. If headsup isn't listed, change the bundle ID in `notifier-app/Info.plist.template` and re-run `setup.sh` — macOS treats the new ID as a fresh app and re-prompts.
+Most likely the notifier `.app` wasn't built. Re-run `setup.sh` and watch the Step 5 output. If `swiftc` is missing: `xcode-select --install`. If macOS silently denied notification permission before the icon was in place, go to System Settings, Notifications, find headsup, and flip it to Allow. If headsup isn't listed, change the bundle ID in `notifier-app/Info.plist.template` and re-run `setup.sh`. macOS treats the new ID as a fresh app and re-prompts.
 
 #### "I want to extend it"
 

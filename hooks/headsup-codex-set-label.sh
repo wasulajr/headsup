@@ -37,7 +37,7 @@ apply_ai_power_term_rename() {
         hook_url="${base_url%/}/hook"
     fi
     if [ -z "$base_url" ]; then
-        echo "headsup-codex-set-label: AI Power Term server url not found — live tab title unchanged" >&2
+        echo "headsup-codex-set-label: AI Power Term server url not found — label saved, tab title unchanged" >&2
         return 1
     fi
     if [ -z "$hook_url" ]; then
@@ -149,7 +149,7 @@ except Exception:
 s.close()
 sys.exit(1)
 PY
-        echo "headsup-codex-set-label: AI Power Term rename failed — live tab title unchanged" >&2
+        echo "headsup-codex-set-label: AI Power Term rename failed — label saved, tab title unchanged" >&2
         return 1
     }
     return 0

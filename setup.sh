@@ -550,6 +550,7 @@ note "  3. Type any prompt. The tab should turn blue while Claude works, then"
 note "     orange when it's waiting for you."
 echo
 note "Customize from any Claude Code session:"
+note "  /headsup                default health/status overview + command index"
 note "  /sfl                    save this window for later (checkpoint to ~/.claude/sfl/)"
 note "  /nil                    now is later: reopen every saved window in its own tab"
 note "  /headsup-colors         change the global color palette"
