@@ -19,10 +19,10 @@ Let the report stand on its own unless the user asks a follow-up.
 
 ## Related focused commands
 
-- `/headsup-label` — set the current tab title/badge/watermark
-- `/headsup-config` — settings hub for labels, colors, notifications, and new-tab launch modes
-- `/headsup-status` — explicit passive health snapshot
-- `/headsup-diagnose` — active color/status test
-- `/headsup-colors` — change idle/working/waiting colors
-- `/headsup-notifications` — waiting-tab notifications
-- `/headsup-update` — update headsup from source
+- `/headsup-label`: set the current tab title/badge/watermark
+- `/headsup-config`: settings hub for labels, colors, notifications, and new-tab launch modes
+- `/headsup-status`: explicit passive health snapshot
+- `/headsup-diagnose`: active color/status test
+- `/headsup-colors`: change idle/working/waiting colors
+- `/headsup-notifications`: waiting-tab notifications
+- `/headsup-update`: update headsup from source

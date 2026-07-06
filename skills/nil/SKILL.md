@@ -39,9 +39,9 @@ For each **selected** live checkpoint in `~/.claude/sfl/*.md` (one per saved win
 2. **Ask which to launch with `AskUserQuestion`, using exactly these THREE hard-coded options. Never one-per-window.** The options are a FIXED set and do NOT scale with the number of saved windows, so the call can never exceed the tool's 4-option cap no matter how many windows exist:
 
    - `header`: `"Reopen"`, `multiSelect`: `false`
-   - Option 1 — label **"Open All the Windows"**, description: "Reopen every saved window listed above."
-   - Option 2 — label **"Type the #'s of the Windows to Open"**, description: "Reopen only specific windows. Use the text box to type the numbers from the list, e.g. `1,3,4`."
-   - Option 3 — label **"Something Else"**, description: "None of the above — tell me what you want instead."
+   - Option 1, label **"Open All the Windows"**, description: "Reopen every saved window listed above."
+   - Option 2, label **"Type the #'s of the Windows to Open"**, description: "Reopen only specific windows. Use the text box to type the numbers from the list, e.g. `1,3,4`."
+   - Option 3, label **"Something Else"**, description: "None of the above. Tell me what you want instead."
 
    Put the numbered list directly in the question text above the choices, preserving one window per numbered block. This is mandatory: it makes the list visible even when the command output is hidden or collapsed.
 
