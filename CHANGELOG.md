@@ -2,6 +2,10 @@
 
 All notable changes to headsup. Versions follow [semver](https://semver.org/): MINOR for new features and skills, PATCH for fixes, MAJOR for breaking conf/layout changes that require re-running `setup.sh`.
 
+## [0.4.1] - 2026-07-06
+
+- docs(headsup-label): rewrite skill doc for multi-terminal support (iTerm2, WezTerm, AI Power Term); the v0.4.0 release left this one doc iTerm2-only
+
 ## [0.4.0] - 2026-07-06
 
 - Multi-terminal support: iTerm2, WezTerm, and AI Power Term. Status colors, labels, the status bar, status-report, and /nil auto-detect the active terminal (ITERM_SESSION_ID / WEZTERM_PANE / AI_POWER_TERM_SESSION_ID) and drive each one natively.
