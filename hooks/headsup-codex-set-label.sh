@@ -181,15 +181,21 @@ apply_osc() {
 }
 
 if [ "${1:-}" = "--clear" ]; then
-    rm -f "$CONF_DIR/${SESSION_KEY}.conf" "$STATE_DIR/${UUID}.badge"
     headsup_badge_text() { basename "$PWD"; }
     headsup_title_text() { printf 'Codex · %s' "$1"; }
     [ -f "$HOOK_DIR/headsup-status.conf" ] && . "$HOOK_DIR/headsup-status.conf"
     headsup_title_text() { printf 'Codex · %s' "$1"; }
     BADGE=$(headsup_badge_text)
     TITLE=$(headsup_title_text "$BADGE")
-    apply_osc "$BADGE" "$TITLE"
-    echo "headsup-codex-set-label: per-session label cleared — reverted to '$TITLE'"
+    if apply_osc "$BADGE" "$TITLE"; then
+        rm -f "$CONF_DIR/${SESSION_KEY}.conf" "$STATE_DIR/${UUID}.badge"
+        echo "headsup-codex-set-label: per-session label cleared — reverted to '$TITLE'"
+    elif [ "$TERMINAL_PROVIDER" = "ai-power-term" ]; then
+        echo "headsup-codex-set-label: AI Power Term rename failed — saved label kept, live tab title unchanged" >&2
+    else
+        rm -f "$CONF_DIR/${SESSION_KEY}.conf" "$STATE_DIR/${UUID}.badge"
+        echo "headsup-codex-set-label: per-session label cleared, but live terminal title did not update" >&2
+    fi
     exit 0
 fi
 
@@ -198,6 +204,14 @@ LABEL="$*"
 
 mkdir -p "$CONF_DIR" "$STATE_DIR"
 ESCAPED=$(printf '%s' "$LABEL" | sed "s/'/'\\\\''/g")
+
+if [ "$TERMINAL_PROVIDER" = "ai-power-term" ]; then
+    if ! apply_osc "$LABEL" "$LABEL"; then
+        echo "headsup-codex-set-label: AI Power Term rename failed — label not saved" >&2
+        exit 0
+    fi
+fi
+
 cat > "$CONF_DIR/${SESSION_KEY}.conf" <<EOF
 # Per-terminal-session override for this Codex pane.
 # Written by headsup-codex-set-label.sh. Local-only.
@@ -207,5 +221,12 @@ headsup_title_text() { printf '%s' '$ESCAPED'; }
 EOF
 
 printf '%s\n' "$LABEL" > "$STATE_DIR/${UUID}.badge"
-apply_osc "$LABEL" "$LABEL"
-echo "headsup-codex-set-label: label set to '$LABEL'"
+if [ "$TERMINAL_PROVIDER" != "ai-power-term" ]; then
+    if apply_osc "$LABEL" "$LABEL"; then
+        echo "headsup-codex-set-label: label set to '$LABEL'"
+    else
+        echo "headsup-codex-set-label: label saved to '$LABEL', but live terminal title did not update" >&2
+    fi
+else
+    echo "headsup-codex-set-label: label set to '$LABEL'"
+fi
