@@ -207,4 +207,22 @@ else
     dim "(cost helper not installed)"
 fi
 
+# ── Usage windows (6h block + week) ───────────────────────────────────────
+USAGE_WINDOWS="$HOME/.claude/hooks/headsup-usage-windows.py"
+hdr "Usage windows"
+if [ -f "$USAGE_WINDOWS" ]; then
+    SESSION_PCT="" SESSION_USED="" SESSION_LIMIT_FMT="" SESSION_COST=""
+    WEEK_PCT="" WEEK_USED="" WEEK_LIMIT_FMT="" WEEK_COST="" SESSION_RESET=""
+    eval "$(python3 "$USAGE_WINDOWS" 2>/dev/null)" 2>/dev/null || true
+    if [ -n "$SESSION_PCT" ]; then
+        dim "Session (6h): ${SESSION_USED}/${SESSION_LIMIT_FMT} ~${SESSION_PCT}%  API cost ~\$${SESSION_COST}"
+        dim "Week:         ${WEEK_USED}/${WEEK_LIMIT_FMT} ~${WEEK_PCT}%  API cost ~\$${WEEK_COST}"
+        [ -n "$SESSION_RESET" ] && dim "Session resets: ${SESSION_RESET}"
+    else
+        dim "no usage-window data (headsup-usage-windows.py produced no output)"
+    fi
+else
+    dim "(usage-windows helper not installed)"
+fi
+
 echo
