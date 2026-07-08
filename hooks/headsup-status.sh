@@ -90,7 +90,25 @@ IDLE_COLOR="ffffff"     # white  — fresh session / idle
 PROCESS_COLOR="3a82f5"  # blue   — Claude is processing
 WAIT_COLOR="ffcc00"     # yellow — Claude is waiting on you
 
-headsup_badge_text() { basename "$PWD"; }
+# Auto-label from git branch (issue #12): when $PWD is in a repo on a
+# non-trivial branch, default the tab label to the branch name instead of
+# basename $PWD. A manual /headsup-label still wins: its per-session conf
+# redefines this function and is sourced after this default.
+HEADSUP_AUTO_LABEL_FROM_BRANCH="${HEADSUP_AUTO_LABEL_FROM_BRANCH:-true}"
+HEADSUP_AUTO_LABEL_SKIP_BRANCHES="${HEADSUP_AUTO_LABEL_SKIP_BRANCHES:-main master HEAD}"
+headsup_badge_text() {
+    if [ "$HEADSUP_AUTO_LABEL_FROM_BRANCH" = "true" ]; then
+        local br skip
+        br=$(git -C "$PWD" symbolic-ref --quiet --short HEAD 2>/dev/null)
+        if [ -n "$br" ]; then
+            for skip in $HEADSUP_AUTO_LABEL_SKIP_BRANCHES; do
+                [ "$br" = "$skip" ] && { br=""; break; }
+            done
+        fi
+        [ -n "$br" ] && { printf '%s' "$br"; return; }
+    fi
+    basename "$PWD"
+}
 headsup_title_text() { printf 'Claude · %s' "$1"; }
 
 CONFIG_FILE="$HOME/.claude/hooks/headsup-status.conf"
