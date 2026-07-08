@@ -15,6 +15,11 @@ WARN_AT=70       # yellow + ⚠
 DANGER_AT=90     # red + 🔴  + fires the macOS notification
 BAR_WIDTH=10
 
+# Escalating Session (6h block) / Week usage alert thresholds (issue #11).
+# Space-separated percentages; override in headsup-status.conf. One-shot per
+# threshold per window, re-armed after the block/week resets.
+USAGE_ALERT_THRESHOLDS="${USAGE_ALERT_THRESHOLDS:-80 90 95}"
+
 # ── Notification defaults (also honor headsup-notifications.conf) ─────────
 NOTIFICATION_SOUND="Glass"
 
@@ -232,6 +237,38 @@ if [ "$NEXT" -gt 0 ]; then
 fi
 
 [ "$PCT" -lt 85 ] && echo "0" > "$STATE"
+
+# ── Session / Week usage alerts (issue #11) ───────────────────────────────
+# Mirror the context escalation above for the 6h-block and weekly output-token
+# windows emitted by headsup-usage-windows.py. Each window keeps its own state
+# file so the two sequences fire independently, and re-arms when usage falls
+# back below the lowest threshold (i.e. after a block or week reset).
+usage_window_alert() {
+    local key="$1" pct="$2" name="$3"     # key=session|week, pct=int, name=label
+    [ -n "$pct" ] || return 0
+    [[ "$pct" =~ ^[0-9]+$ ]] || return 0
+    local state="/tmp/cc_${key}_alert_${SESSION}"
+    local raw last next=0 thresh lowest=999
+    raw=$([ -f "$state" ] && cat "$state" || echo 0)
+    [[ "$raw" =~ ^[0-9]+$ ]] && last=$raw || last=0
+    for thresh in $USAGE_ALERT_THRESHOLDS; do
+        [ "$thresh" -lt "$lowest" ] && lowest=$thresh
+        if [ "$pct" -ge "$thresh" ] && [ "$last" -lt "$thresh" ]; then
+            next=$thresh
+        fi
+    done
+    if [ "$next" -gt 0 ]; then
+        local body
+        if   [ "$next" -ge 95 ]; then body="${name} usage at ${pct}%: nearly throttled"
+        elif [ "$next" -ge 90 ]; then body="${name} usage at ${pct}%: approaching the limit"
+        else                          body="${name} usage at ${pct}%"; fi
+        fire_notification "$LABEL" "${name} at ${pct}%" "$body" "${key}_${SESSION}"
+        echo "$next" > "$state"
+    fi
+    [ "$pct" -lt "$lowest" ] && echo 0 > "$state"
+}
+usage_window_alert session "$SESSION_PCT" "Session"
+usage_window_alert week    "$WEEK_PCT"    "Week"
 
 # ── Color + label ─────────────────────────────────────────────────────────
 if   [ "$PCT" -ge "$DANGER_AT" ]; then COLOR=$RED;    NOTE=" 🔴 compact soon"
