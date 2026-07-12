@@ -286,7 +286,7 @@ LINE="👤 ${DIM}${ACCOUNT}${RESET}  ${DIM}${MODEL}${RESET}"
 if [ "$PCT" -ge "$WARN_AT" ]; then
     LINE+="  Context: ${COLOR}${BAR} ${PCT}%${NOTE}${RESET}"
 else
-    LINE+="  ${DIM}${PCT}%${RESET}"
+    LINE+="  Ctx: ${DIM}${PCT}%${RESET}"
 fi
 if [ -n "$SESSION_PCT" ]; then
     LINE+="  Session: ${DIM}${SESSION_USED}/${SESSION_LIMIT_FMT} ~${SESSION_PCT}%${RESET}  ${DIM}API cost ~\$${SESSION_COST}${RESET}"
