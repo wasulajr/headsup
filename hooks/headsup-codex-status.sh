@@ -17,6 +17,8 @@
 #   ~/.codex/hooks/headsup-codex-status.sh <event>
 
 EVENT="$1"
+RAW_EVENT="$EVENT"
+HOOK_PAYLOAD="$(cat 2>/dev/null || true)"
 
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 HOOK_DIR="$CODEX_HOME/hooks"
@@ -58,19 +60,6 @@ elif [ -n "${ITERM_SESSION_ID:-}" ]; then
     TERMINAL_PROVIDER="iterm"
     TERMINAL_ID="${ITERM_SESSION_ID#*:}"
     SESSION_KEY=$(printf '%s' "$ITERM_SESSION_ID" | tr -c '[:alnum:]-' '_')
-fi
-
-# Declared-idle (digadop-ai#903): APT tabs can explicitly mark a Stop as
-# "nothing to do" via ~/.claude/hooks/headsup-state.sh idle. Codex owns its
-# own hook chain, so mirror APT's hooks/status.sh marker handling here instead
-# of installing a second APT status hook that would double-post lifecycle
-# events for Codex sessions.
-if [ "$TERMINAL_PROVIDER" = "ai-power-term" ] && [ -n "$TERMINAL_ID" ]; then
-    IDLE_MARK="$HOME/.claude/hooks/.state/apt-declared-idle-$TERMINAL_ID"
-    case "$EVENT" in
-        UserPromptSubmit|SessionStart) rm -f "$IDLE_MARK" 2>/dev/null || true ;;
-        Stop) [ -f "$IDLE_MARK" ] && EVENT="SessionStart" ;;
-    esac
 fi
 
 headsup_badge_text() { basename "$PWD"; }
@@ -188,6 +177,125 @@ spawn_oneshot_apply() {
     disown 2>/dev/null || true
 }
 
+slugify() {
+    printf '%s' "$1" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -c 'a-z0-9-' '-' \
+        | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//'
+}
+
+append_slug() {
+    local s
+    s=$(slugify "$1")
+    [ -n "$s" ] || return 0
+    case " ${CODEX_CLIFF_SLUGS:-} " in
+        *" $s "*) ;;
+        *) CODEX_CLIFF_SLUGS="${CODEX_CLIFF_SLUGS:+$CODEX_CLIFF_SLUGS }$s" ;;
+    esac
+}
+
+build_codex_cliff_slugs() {
+    CODEX_CLIFF_SLUGS=""
+    local label
+    label=$(headsup_badge_text 2>/dev/null || true)
+    [ -n "$label" ] && append_slug "$label"
+    append_slug "$(basename "$PWD")"
+
+    # Brand/repo transition aliases, kept in sync with cliff-inbox-inject.sh.
+    case " $CODEX_CLIFF_SLUGS " in
+        *" jobuna "*) append_slug "pursuit" ;;
+        *" pursuit "*) append_slug "jobuna" ;;
+    esac
+    case " $CODEX_CLIFF_SLUGS " in
+        *" pursuit-sidebar-detail "*) append_slug "pursuit--sidebar-detail" ;;
+        *" pursuit--sidebar-detail "*) append_slug "pursuit-sidebar-detail" ;;
+    esac
+}
+
+block_codex_stop_for_cliff_if_needed() {
+    [ "$RAW_EVENT" = "Stop" ] || return 0
+    case "$HOOK_PAYLOAD" in *'"stop_hook_active":true'*) return 0 ;; esac
+
+    local cliff="${CLIFF_BIN:-$HOME/.claude/coordination/lib/cliff.sh}"
+    [ -x "$cliff" ] || return 0
+
+    build_codex_cliff_slugs
+    [ -n "${CODEX_CLIFF_SLUGS:-}" ] || return 0
+
+    local seen_key="${SESSION_KEY:-${TERMINAL_ID:-$(slugify "$PWD")}}"
+    seen_key=$(printf '%s' "codex-$seen_key" | tr -c '[:alnum:]-' '_')
+    local seen_dir="$HOME/.claude/coordination/stop-seen"
+    local seen="$seen_dir/$seen_key"
+    mkdir -p "$seen_dir" 2>/dev/null || return 0
+    [ -f "$seen" ] || : > "$seen" 2>/dev/null || return 0
+
+    local threshold="${CLIFF_STOP_BLOCK_AGE_MIN:-0}"
+    local inbox id from to blk safe acked age ask eff promoted
+    local all_ids="" new_block=""
+    for slug in $CODEX_CLIFF_SLUGS; do
+        inbox=$(CLIFF_SLUG="$slug" "$cliff" inbox --porcelain 2>/dev/null || true)
+        [ -n "$inbox" ] || continue
+        while IFS=$'\t' read -r id from to blk safe acked age ask; do
+            [ -n "$id" ] || continue
+            case " $all_ids " in *" $id "*) continue ;; esac
+            all_ids="$all_ids $id"
+            [ "$acked" = "acked-by-you" ] && continue
+            eff=no
+            [ "$blk" = "yes" ] && eff=yes
+            if [ "$eff" = "no" ] && [ "${age:-0}" -ge "$threshold" ] 2>/dev/null; then
+                eff=yes
+            fi
+            [ "$eff" = "yes" ] || continue
+            grep -qxF "$id" "$seen" 2>/dev/null && continue
+            promoted=""
+            [ "$blk" != "yes" ] && promoted=" (auto-promoted: unanswered ${age:-0}m)"
+            new_block="${new_block}  [${id}] to ${to} via ${slug} from ${from}${promoted} :: ${ask}
+"
+        done <<EOF
+$inbox
+EOF
+    done
+
+    if [ -n "$all_ids" ]; then
+        local tmp
+        tmp=$(mktemp) || return 0
+        while IFS= read -r id; do
+            [ -n "$id" ] || continue
+            case " $all_ids " in *" $id "*) printf '%s\n' "$id" ;; esac
+        done < "$seen" > "$tmp"
+        mv "$tmp" "$seen" 2>/dev/null || rm -f "$tmp"
+    fi
+
+    [ -n "$new_block" ] || return 0
+    printf '%s' "$new_block" | sed -nE 's/^  \[([^]]+)\].*/\1/p' >> "$seen"
+
+    local reason
+    reason="Cliff: message(s) are waiting on this Codex window - handle them before going idle:
+${new_block}
+Act per the Cliff protocol. Default is DO IT if reversible + within mandate. Reply --resolution need-steve only at a hard gate: money, prod deploy/prod-data write, external/irreversible send or publish, cross-product contract change, granting access, or exposing a secret.
+
+Close each thread with:
+  CLIFF_SLUG=<shown-slug> ~/.claude/coordination/lib/cliff.sh reply <id> --resolution done|rejected|need-steve \"<text>\""
+
+    set_tab_color "$WAIT_COLOR"
+    python3 - "$reason" <<'PY'
+import json
+import sys
+print(json.dumps({"decision": "block", "reason": sys.argv[1]}))
+PY
+    exit 0
+}
+
+apply_declared_idle_marker() {
+    [ "$TERMINAL_PROVIDER" = "ai-power-term" ] || return 0
+    [ -n "$TERMINAL_ID" ] || return 0
+    local idle_mark="$HOME/.claude/hooks/.state/apt-declared-idle-$TERMINAL_ID"
+    case "$RAW_EVENT" in
+        UserPromptSubmit|SessionStart) rm -f "$idle_mark" 2>/dev/null || true ;;
+        Stop) [ -f "$idle_mark" ] && EVENT="SessionStart" ;;
+    esac
+}
+
 set_tab_color() {
     local color="$1"
     local attention
@@ -235,6 +343,9 @@ if [ -n "$TERMINAL_ID" ]; then
         printf '%s\n' "$_badge_for_sidecar" > "$STATE_DIR/${_uuid_for_sidecar}.badge" 2>/dev/null || true
     fi
 fi
+
+block_codex_stop_for_cliff_if_needed
+apply_declared_idle_marker
 
 case "$EVENT" in
     SessionStart)
