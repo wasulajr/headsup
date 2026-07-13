@@ -60,6 +60,19 @@ elif [ -n "${ITERM_SESSION_ID:-}" ]; then
     SESSION_KEY=$(printf '%s' "$ITERM_SESSION_ID" | tr -c '[:alnum:]-' '_')
 fi
 
+# Declared-idle (digadop-ai#903): APT tabs can explicitly mark a Stop as
+# "nothing to do" via ~/.claude/hooks/headsup-state.sh idle. Codex owns its
+# own hook chain, so mirror APT's hooks/status.sh marker handling here instead
+# of installing a second APT status hook that would double-post lifecycle
+# events for Codex sessions.
+if [ "$TERMINAL_PROVIDER" = "ai-power-term" ] && [ -n "$TERMINAL_ID" ]; then
+    IDLE_MARK="$HOME/.claude/hooks/.state/apt-declared-idle-$TERMINAL_ID"
+    case "$EVENT" in
+        UserPromptSubmit|SessionStart) rm -f "$IDLE_MARK" 2>/dev/null || true ;;
+        Stop) [ -f "$IDLE_MARK" ] && EVENT="SessionStart" ;;
+    esac
+fi
+
 headsup_badge_text() { basename "$PWD"; }
 headsup_title_text() { printf 'Codex · %s' "$1"; }
 
