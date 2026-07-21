@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """headsup-usage-windows.py — approximate Claude session and week usage.
 
-Reads ~/.claude/projects/**/*.jsonl across two time windows:
+Reads $CLAUDE_CONFIG_DIR/projects/**/*.jsonl (default ~/.claude/projects) across
+two time windows. Usage is per-account, so the config dir must be honored:
 
   Session  current 6-hour block; blocks reset at 01:40 07:40 13:40 19:40 UTC
   Week     current week: Monday 17:00 ET (21:00 UTC) to following Monday
@@ -22,13 +23,22 @@ Outputs shell-eval-able assignments on one line:
 Results cached in /tmp/headsup_usage_cache.json for 60s.
 """
 
+import hashlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-PROJECTS_DIR  = Path.home() / ".claude" / "projects"
-CACHE_FILE    = Path("/tmp/headsup_usage_cache.json")
+# Account-namespaced: Claude Code writes transcripts under $CLAUDE_CONFIG_DIR,
+# so a hardcoded ~/.claude/projects makes every non-default account read the
+# WRONG account's usage (zeros for session, another account's totals for week).
+CONFIG_DIR    = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+PROJECTS_DIR  = CONFIG_DIR / "projects"
+
+# Cache is keyed by account too. A single shared cache file lets concurrent
+# windows on different accounts overwrite each other's totals for the TTL.
+_ACCT_KEY     = hashlib.sha256(str(PROJECTS_DIR.resolve()).encode()).hexdigest()[:8]
+CACHE_FILE    = Path(f"/tmp/headsup_usage_cache_{_ACCT_KEY}.json")
 CACHE_TTL_SEC = 60
 
 SESSION_LIMIT = int(os.environ.get("HEADSUP_SESSION_LIMIT", 17_000_000))

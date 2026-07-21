@@ -2,7 +2,8 @@
 """Aggregate token usage from a Claude Code session JSONL transcript.
 
 Claude Code writes one JSONL per session under:
-    ~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl
+    $CLAUDE_CONFIG_DIR/projects/<encoded-cwd>/<session-uuid>.jsonl
+(default ~/.claude/projects when CLAUDE_CONFIG_DIR is unset)
 
 Each "assistant" entry's `message.usage` includes input/output/cache
 token counts. This helper sums them across the file and prints a brief
@@ -27,7 +28,11 @@ import sys
 from pathlib import Path
 
 
-PROJECTS_DIR = Path(os.path.expanduser("~/.claude/projects"))
+# Account-namespaced: Claude Code writes transcripts under $CLAUDE_CONFIG_DIR.
+# Hardcoding ~/.claude/projects makes this silently find nothing (and report
+# no usage at all) in any window running under a non-default account.
+CONFIG_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
+PROJECTS_DIR = CONFIG_DIR / "projects"
 
 
 def encode_cwd(cwd: str) -> str:
