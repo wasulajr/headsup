@@ -84,6 +84,27 @@ on run {input, parameters}
 		logMsg("dialog cancelled/error " &amp; (errNum as text) &amp; ": " &amp; errMsg)
 		set theLabel to ""
 	end try
+	-- headsup#33: weekly-utilization gate. The gate script prints a warning line
+	-- when the account this tab would use is at/over its weekly threshold (or is
+	-- not logged in at all); empty output means clear to launch.
+	set gateMsg to ""
+	try
+		set gateMsg to do shell script "~/.claude/hooks/headsup-newtab-gate.sh 2&gt;/dev/null || true"
+	end try
+	if gateMsg is not "" then
+		logMsg("gate warning: " &amp; gateMsg)
+		try
+			set gdlg to display dialog gateMsg &amp; return &amp; return &amp; "Open the tab anyway?" buttons {"Cancel", "Open Anyway"} default button "Cancel" with icon caution with title "New Claude Tab"
+			if button returned of gdlg is "Cancel" then
+				logMsg("gate: user cancelled")
+				return
+			end if
+			logMsg("gate: user chose Open Anyway")
+		on error
+			logMsg("gate: dialog cancelled")
+			return
+		end try
+	end if
 	-- read the configured launch args for claude from the headsup conf
 	-- (NEWTAB_CLAUDE_ARGS; empty = normal interactive mode). Change it with the
 	-- /headsup-config newtabs skill or by editing headsup-status.conf.
