@@ -91,6 +91,20 @@ on run {input, parameters}
 	try
 		set gateMsg to do shell script "~/.claude/hooks/headsup-newtab-gate.sh 2&gt;/dev/null || true"
 	end try
+	-- headsup#35: a "SEAT|&lt;configDir&gt;|&lt;email&gt;" line is a seat selection, not a
+	-- warning. Bind the tab to that seat via CLAUDE_CONFIG_DIR (silent; the
+	-- account shows in the session's welcome box and status line).
+	set seatDir to ""
+	if gateMsg starts with "SEAT|" then
+		set prevTID2 to AppleScript's text item delimiters
+		set AppleScript's text item delimiters to "|"
+		try
+			set seatDir to text item 2 of gateMsg
+			logMsg("seat selected: " &amp; gateMsg)
+		end try
+		set AppleScript's text item delimiters to prevTID2
+		set gateMsg to ""
+	end if
 	if gateMsg is not "" then
 		logMsg("gate warning: " &amp; gateMsg)
 		try
@@ -113,7 +127,8 @@ on run {input, parameters}
 		set claudeArgs to do shell script "f=\"$HOME/.claude/hooks/headsup-status.conf\"; [ -f \"$f\" ] &amp;&amp; . \"$f\"; printf '%s' \"${NEWTAB_CLAUDE_ARGS:-}\""
 	end try
 	set claudeCmd to "claude"
-	if claudeArgs is not "" then set claudeCmd to "claude " &amp; claudeArgs
+	if seatDir is not "" then set claudeCmd to "CLAUDE_CONFIG_DIR=" &amp; quoted form of seatDir &amp; " claude"
+	if claudeArgs is not "" then set claudeCmd to claudeCmd &amp; " " &amp; claudeArgs
 	-- build shell command: apply the label inside the new session (deterministic, no LLM), then cd + claude
 	if theLabel is not "" then
 		set shellCmd to "~/.claude/hooks/headsup-set-label.sh " &amp; quoted form of theLabel &amp; " ; cd " &amp; quoted form of folderPath &amp; " &amp;&amp; " &amp; claudeCmd
