@@ -53,6 +53,7 @@ SFL_DIR="$HOME/.claude/sfl"
 SET_LABEL="$HOME/.claude/hooks/headsup-set-label.sh"
 CODEX_SET_LABEL="$HOME/.codex/hooks/headsup-codex-set-label.sh"
 AI_POWER_TERM_BIN="${AI_POWER_TERM_BIN:-$HOME/code/ai-power-term/bin/ai-power-term}"
+HEADSUP_SPAWN_PAUSE_FILE="${HEADSUP_SPAWN_PAUSE_FILE:-$HOME/.claude/coordination/spawn-paused}"
 DRY_RUN=0
 LIST=0
 CHAT_LIST=0
@@ -70,6 +71,27 @@ entries=("$SFL_DIR"/*.md)   # does not recurse into archive/ or lib/
 if [ ${#entries[@]} -eq 0 ]; then
     echo "no-entries"
     exit 0
+fi
+
+if [ "$DRY_RUN" -eq 0 ] && [ "$LIST" -eq 0 ] && [ -s "$HEADSUP_SPAWN_PAUSE_FILE" ]; then
+    pause_reason="$(python3 - "$HEADSUP_SPAWN_PAUSE_FILE" <<'PY' 2>/dev/null || true
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+try:
+    raw = p.read_text(errors="replace").strip()
+    data = json.loads(raw) if raw else {}
+    if isinstance(data, dict):
+        print(data.get("reason") or data.get("source") or "spawns paused")
+    else:
+        print(str(data)[:160])
+except Exception:
+    print("spawns paused")
+PY
+)"
+    echo "nil-open: spawns are paused; not reopening saved windows (${pause_reason:-spawns paused})." >&2
+    echo "nil-open: resume with 'ai-power-term spawn-pause --resume' or the SFL menu's Resume Spawns item." >&2
+    exit 75
 fi
 
 # Pull a single top-level key out of a file's YAML frontmatter.
