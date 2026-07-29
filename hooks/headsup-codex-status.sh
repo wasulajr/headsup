@@ -194,12 +194,49 @@ append_slug() {
     esac
 }
 
+# The tab LABEL is a deliberate identity, so it is taken as-is. basename($PWD) is only a
+# GUESS that the folder name is also an identity (it is how a karen tab in the whoseeswhat
+# repo still picks up mail addressed to "whoseeswhat"). A wrong guess is not merely useless,
+# it is expensive: cliff.sh hydrate scopes with startswith(slug + "-"), so the org name
+# "digadop-ai" -- what basename($PWD) yields for EVERY tab in the monorepo -- matches every
+# digadop-ai-* window and drags in the whole org's mail. Measured scopes: nabu 0.82s,
+# jupiter 1.00s, digadop-ai 5.28s, which alone overruns the 5s hook budget.
+#
+# So: validate the GUESS against the roster, never the label. Validating the label too would
+# silently drop live non-roster windows (react-client, dbserver) whose own inbox injection is
+# guaranteed by CLIFF.md -- the roster guard gates auto-WAKE, not a live window's own inbox.
+# roster_persona_has is the persona-only check (wong, 2026-07-15); roster_has/roster_canon are
+# delivery-token oriented and must NOT be used here. Fails OPEN: with roster.sh missing or the
+# roster empty we keep the old pass-through, so a roster outage costs a slow hook, never mail.
+_ROSTER_LIB="${CLIFF_COORD_DIR:-$HOME/.claude/coordination}/lib/roster.sh"
+[ -f "$_ROSTER_LIB" ] && . "$_ROSTER_LIB" 2>/dev/null
+
+append_derived_slug() { # append a GUESSED slug only if the roster says it is a real persona
+    local s
+    s=$(slugify "$1")
+    [ -n "$s" ] || return 0
+    if command -v roster_persona_has >/dev/null 2>&1 && [ -n "$(roster_tokens 2>/dev/null)" ]; then
+        roster_persona_has "$s" || return 0
+    fi
+    append_slug "$s"
+}
+
 build_codex_cliff_slugs() {
     CODEX_CLIFF_SLUGS=""
     local label
     label=$(headsup_badge_text 2>/dev/null || true)
-    [ -n "$label" ] && append_slug "$label"
-    append_slug "$(basename "$PWD")"
+    # Is that label deliberate, or just the basename($PWD) default wearing a label's clothes?
+    # The per-session conf on disk is the signal, NOT string equality: a real conf may legitimately
+    # name the tab after its folder (the react-client window does exactly that), and comparing
+    # strings would silently drop it.
+    if [ -n "$label" ]; then
+        if [ -n "${SESSION_CONFIG_FILE:-}" ] && [ -f "${SESSION_CONFIG_FILE:-}" ]; then
+            append_slug "$label"          # deliberate identity: take it as-is
+        else
+            append_derived_slug "$label"  # no conf: this is the basename default, so validate it
+        fi
+    fi
+    append_derived_slug "$(basename "$PWD")"
 
     # Brand/repo transition aliases, kept in sync with cliff-inbox-inject.sh.
     case " $CODEX_CLIFF_SLUGS " in
