@@ -21,6 +21,8 @@ RESULTS="${1:-$HERE/../.headsup-test-results.tsv}"
 . "$HERE/test_window_id.sh"
 # shellcheck source=test_headsup_state.sh
 . "$HERE/test_headsup_state.sh"
+# shellcheck source=test_set_label.sh
+. "$HERE/test_set_label.sh"
 
 hs_init "$RESULTS"
 
@@ -32,5 +34,8 @@ run_window_id_suite
 
 printf '\n--- suite: headsup-state.sh (idle/waiting declaration) ---\n'
 run_state_suite
+
+printf '\n--- suite: headsup-set-label.sh (the writer half of the fleet slug) ---\n'
+run_set_label_suite
 
 hs_summary
