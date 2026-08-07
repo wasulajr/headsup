@@ -282,12 +282,21 @@ block_codex_stop_for_cliff_if_needed() {
     if command -v timeout >/dev/null 2>&1; then _to_bin="timeout"
     elif command -v gtimeout >/dev/null 2>&1; then _to_bin="gtimeout"; fi
     local _call_to="${CODEX_STOP_CLIFF_CALL_TIMEOUT:-3}"
-    local _budget="${CODEX_STOP_CLIFF_BUDGET:-3}"
+    local _budget="${CODEX_STOP_CLIFF_BUDGET:-2}"
     local _t0=$SECONDS
+    local _rem _this
     for slug in $CODEX_CLIFF_SLUGS; do
-        [ "$((SECONDS - _t0))" -ge "$_budget" ] && break
+        # Cap each call at the REMAINING budget, not a fixed _call_to. $SECONDS is
+        # integer and its tick is unrelated to _t0, so a fixed cap admitted after the
+        # guard read low could push total elapsed to ~budget+_call_to (~6s, measured
+        # 2/24 overruns max 6.49s by infra-qa on headsup#45). Bounding by remaining
+        # budget holds total elapsed at ~budget (0/24 overruns, max 4.56s).
+        _rem=$(( _budget - (SECONDS - _t0) ))
+        [ "$_rem" -le 0 ] && break
         if [ -n "$_to_bin" ]; then
-            inbox=$(CLIFF_SLUG="$slug" "$_to_bin" "$_call_to" "$cliff" inbox --porcelain 2>/dev/null || true)
+            _this=$_call_to
+            [ "$_rem" -lt "$_this" ] && _this=$_rem
+            inbox=$(CLIFF_SLUG="$slug" "$_to_bin" "$_this" "$cliff" inbox --porcelain 2>/dev/null || true)
         else
             inbox=$(CLIFF_SLUG="$slug" "$cliff" inbox --porcelain 2>/dev/null || true)
         fi
