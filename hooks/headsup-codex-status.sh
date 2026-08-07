@@ -269,8 +269,28 @@ block_codex_stop_for_cliff_if_needed() {
     local threshold="${CLIFF_STOP_BLOCK_AGE_MIN:-0}"
     local inbox id from to blk safe acked age ask eff promoted
     local all_ids="" new_block=""
+
+    # Bound the per-slug Cliff reads so this Stop hook can NEVER blow its 5s budget.
+    # cliff.sh inbox hits Agent Office and is routinely ~3.5s (spiking higher), so an
+    # unbounded loop over multiple slugs overruns the hook deadline; the hook is then
+    # KILLED, which loses the warning entirely AND logs a failure. Instead cap each read
+    # and the whole loop, and FAIL OPEN (skip the block) once the budget is spent: the
+    # same messages still surface via the UserPromptSubmit inbox inject (15s budget) and
+    # the window's own inbox, so a bounded skip is strictly better than a killed hook.
+    # Tunable via CODEX_STOP_CLIFF_CALL_TIMEOUT / CODEX_STOP_CLIFF_BUDGET (seconds).
+    local _to_bin=""
+    if command -v timeout >/dev/null 2>&1; then _to_bin="timeout"
+    elif command -v gtimeout >/dev/null 2>&1; then _to_bin="gtimeout"; fi
+    local _call_to="${CODEX_STOP_CLIFF_CALL_TIMEOUT:-3}"
+    local _budget="${CODEX_STOP_CLIFF_BUDGET:-3}"
+    local _t0=$SECONDS
     for slug in $CODEX_CLIFF_SLUGS; do
-        inbox=$(CLIFF_SLUG="$slug" "$cliff" inbox --porcelain 2>/dev/null || true)
+        [ "$((SECONDS - _t0))" -ge "$_budget" ] && break
+        if [ -n "$_to_bin" ]; then
+            inbox=$(CLIFF_SLUG="$slug" "$_to_bin" "$_call_to" "$cliff" inbox --porcelain 2>/dev/null || true)
+        else
+            inbox=$(CLIFF_SLUG="$slug" "$cliff" inbox --porcelain 2>/dev/null || true)
+        fi
         [ -n "$inbox" ] || continue
         while IFS=$'\t' read -r id from to blk safe acked age ask; do
             [ -n "$id" ] || continue
