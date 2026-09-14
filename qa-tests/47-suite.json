@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "steps": [
+    {
+      "name": "Candidate identity",
+      "run": "git rev-parse HEAD && git diff --exit-code && git diff --cached --exit-code"
+    },
+    {
+      "name": "Installer syntax",
+      "run": "bash -n setup.sh"
+    },
+    {
+      "name": "Real installer wiring step regression",
+      "run": "python3 tests/test_setup_hooks.py"
+    },
+    {
+      "name": "Patch whitespace",
+      "run": "git diff --check origin/main...HEAD"
+    }
+  ]
+}

@@ -469,27 +469,38 @@ HOOK_WIRING=$(cat <<'JSON'
 JSON
 )
 
+HOOK_MERGED=$(mktemp "${SETTINGS}.hooks.XXXXXX") || fatal "Cannot stage hook wiring"
 if [ -f "$SETTINGS" ]; then
-    # Check if our hooks are already wired
-    if jq -e '.hooks.SessionStart[0].hooks[0].command' "$SETTINGS" 2>/dev/null | grep -q "headsup-status.sh"; then
+    if ! jq -s --argjson wiring "$HOOK_WIRING" -f "$SCRIPT_DIR/scripts/merge-hook-wiring.jq" "$SETTINGS" > "$HOOK_MERGED"; then
+        rm -f "$HOOK_MERGED"
+        fatal "Invalid settings or hook wiring; original settings left unchanged"
+    fi
+    # Check all six events, at every index, rather than only SessionStart[0].
+    if jq -e --slurpfile merged "$HOOK_MERGED" '. == $merged[0]' "$SETTINGS" >/dev/null; then
         ok "Hooks already wired in $SETTINGS"
     else
         warn "$SETTINGS exists; need to add hook wiring"
         if confirm "Merge wiring in (backup at $SETTINGS.bak)?" y; then
-            cp "$SETTINGS" "$SETTINGS.bak"
-            jq --argjson hooks "$HOOK_WIRING" '.hooks = ((.hooks // {}) * $hooks)' "$SETTINGS" > "$SETTINGS.tmp" \
+            cp -p "$SETTINGS" "$SETTINGS.bak" \
+                && cp -p "$SETTINGS" "$SETTINGS.tmp" \
+                && cat "$HOOK_MERGED" > "$SETTINGS.tmp" \
                 && mv "$SETTINGS.tmp" "$SETTINGS" \
                 && ok "Hooks merged (backup at settings.json.bak)" \
-                || fatal "jq merge failed"
+                || fatal "Hook settings install failed"
         else
             warn "Hooks NOT wired. The status system won't activate until you wire them yourself. See README.md."
         fi
     fi
 else
     note "Creating $SETTINGS with the hook wiring"
-    printf '{\n  "hooks": %s\n}\n' "$HOOK_WIRING" | jq . > "$SETTINGS"
+    if ! printf '{}\n' | jq -s --argjson wiring "$HOOK_WIRING" -f "$SCRIPT_DIR/scripts/merge-hook-wiring.jq" > "$HOOK_MERGED"; then
+        rm -f "$HOOK_MERGED"
+        fatal "Invalid hook wiring; settings not created"
+    fi
+    mv "$HOOK_MERGED" "$SETTINGS" || fatal "Cannot create hook settings"
     ok "Created"
 fi
+rm -f "$HOOK_MERGED"
 
 # Allow rules so the headsup skills (/headsup-label, /headsup-config newtabs and
 # notify, /headsup-notifications) run without a permission prompt. Delegated to
