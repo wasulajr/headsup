@@ -2,6 +2,11 @@
 
 All notable changes to headsup. Versions follow [semver](https://semver.org/): MINOR for new features and skills, PATCH for fixes, MAJOR for breaking conf/layout changes that require re-running `setup.sh`.
 
+## [0.4.2] - 2026-10-28
+
+- fix(usage): headsup-usage-windows.py is incremental and single-flight. The status line no longer triggers a full week-of-transcripts scan per window: it prints a cached line and at most one detached, niced refresher reads only the bytes appended since the last pass (about 76x faster warm on a 1.6 GiB corpus). Stops the multi-window CPU stampede seen on 10/28/26 (PR 48).
+- Install note: copy only hooks/headsup-usage-windows.py to ~/.claude/hooks. Kill switch: HEADSUP_USAGE_DISABLE=1 or a hooks/.headsup-usage-disabled file.
+
 ## [0.4.1] - 2026-07-06
 
 - docs(headsup-label): rewrite skill doc for multi-terminal support (iTerm2, WezTerm, AI Power Term); the v0.4.0 release left this one doc iTerm2-only
