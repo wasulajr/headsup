@@ -692,9 +692,9 @@ class EndToEnd(Base):
         self.assertEqual(self.error_log(), "", "unexpected errors logged")
 
 
-class Revision3(Base):
-    """Second independent review (adversarial pass on e7a11dd): each finding, plus the behaviours
-    that review showed had no test at all."""
+class Rev3Support(Base):
+    """Shared fixtures for the review-driven test classes: a fake Popen that exits at once, a
+    50-line transcript, and an open() that fails a set number of times for one path."""
     def setUp(self):
         super().setUp()
         self.popen_calls = []
@@ -717,6 +717,21 @@ class Revision3(Base):
     def lines(self, n=50):
         return [assistant(NOW - timedelta(minutes=60 - i), out=10) for i in range(n)]
 
+    def flaky_open(self, path, fail_times):
+        calls = {"n": 0}
+        real_open = open
+        def flaky(file, *a, **k):
+            if str(file) == str(path):
+                calls["n"] += 1
+                if calls["n"] <= fail_times:
+                    raise OSError(5, "EIO")
+            return real_open(file, *a, **k)
+        return calls, flaky
+
+
+class Revision3(Rev3Support):
+    """Second independent review (adversarial pass on e7a11dd): each finding, plus the behaviours
+    that review showed had no test at all."""
     # -- finding 1: the watchdog must reach run_refresh ---------------------------------------
     def test_the_watchdog_is_not_swallowed_by_the_scan_handlers(self):
         self.write("a.jsonl", self.lines(3))
@@ -759,17 +774,6 @@ class Revision3(Base):
             os.close(real)
 
     # -- finding 3: a transient error must not become a lasting undercount ----------------------
-    def flaky_open(self, path, fail_times):
-        calls = {"n": 0}
-        real_open = open
-        def flaky(file, *a, **k):
-            if str(file) == str(path):
-                calls["n"] += 1
-                if calls["n"] <= fail_times:
-                    raise OSError(5, "EIO")
-            return real_open(file, *a, **k)
-        return calls, flaky
-
     def test_a_transient_read_error_is_retried_on_the_next_refresh(self):
         p = self.write("a.jsonl", self.lines())
         calls, flaky = self.flaky_open(p, 1)
@@ -904,9 +908,11 @@ class Revision3(Base):
                     s.sent += 1
                     return next(it)
             return Wrapper()
+        reported = []
         with mock.patch.object(os, "scandir", flaky):
-            found = list(self.mod.iter_transcripts(self.mod.PROJECTS_DIR))
+            found = list(self.mod.iter_transcripts(self.mod.PROJECTS_DIR, lambda d, e: reported.append(d)))
         self.assertEqual(len(found), 1)
+        self.assertEqual(len(reported), 2, "both directories that stopped listing are reported")
 
     # -- finding 9: a week rollover must agree with the original scan -----------------------------
     def test_the_week_rolling_over_rebuilds_so_an_aged_out_file_stops_counting(self):
@@ -950,6 +956,111 @@ class Revision3(Base):
     def test_an_edit_inside_the_tail_before_the_offset_is_caught_by_the_fingerprint(self):
         self._edit_and_append(-6)
         self.assertIn('"fingerprint"', self.error_log())
+
+
+class Revision4(Rev3Support):
+    """Third review (on 5dfa71d): its three new findings, and the behaviours it showed still untested."""
+    # -- A: a launch stamp from the future (the clock was stepped back) must not starve refreshes --
+    def test_a_future_dated_launch_stamp_does_not_block_a_refresh(self):
+        os.close(self.mod.try_lock())
+        tomorrow = time.time() + 86400
+        os.utime(self.mod.LOCK_FILE, (tomorrow, tomorrow))
+        self.mod.main()
+        self.assertEqual(len(self.popen_calls), 1)
+
+    # -- B: a checkpoint during a rebuild already carries this week, so a restart resumes ----------
+    def test_a_checkpoint_saved_during_a_rebuild_survives_a_restart(self):
+        self.write("a.jsonl", self.lines())
+        self.mod.CHECKPOINT_SEC = 0
+        real, state = self.mod.parse_usage_line, {"n": 0}
+        def dying(line):
+            state["n"] += 1
+            if state["n"] == 30:
+                raise KeyboardInterrupt()           # stands in for a kill
+            return real(line)
+        self.mod.parse_usage_line = dying
+        with self.assertRaises(KeyboardInterrupt):
+            self.mod.refresh(NOW)
+        self.assertEqual(self.mod.load_index()["week"], self.mod.week_start(NOW).timestamp())
+        fresh = load_module(self.config, self.state, self.home)
+        fresh.refresh(NOW)
+        self.assertNotIn("week-rolled", self.error_log(), "the restart resumed instead of rebuilding")
+        s, w = fresh.window_totals(fresh.load_index()["slots"], fresh.block_start(NOW), fresh.week_start(NOW))
+        self.assertEqual(w["out"], 500)
+
+    # -- C: a directory that cannot be listed is reported, and existing counts are kept -------------
+    def scandir_failing_for(self, bad):
+        real = os.scandir
+        def flaky(path):
+            if str(path) == str(bad):
+                raise OSError(5, "EIO")
+            return real(path)
+        return flaky
+
+    def test_an_unlistable_directory_is_logged_once_per_pass_with_a_count(self):
+        self.write("a.jsonl", self.lines(3))
+        with mock.patch.object(os, "scandir", self.scandir_failing_for(self.proj)):
+            self.mod.refresh(NOW)
+        self.assertEqual(self.error_log().count('"walk"'), 1)
+        self.assertIn('"count": 1', self.error_log())
+
+    def test_a_transient_listing_failure_after_a_good_build_loses_nothing(self):
+        self.write("a.jsonl", self.lines())
+        self.mod.refresh(NOW)
+        with mock.patch.object(os, "scandir", self.scandir_failing_for(self.proj)):
+            self.mod.refresh(NOW)
+        self.assertEqual(self.assert_matches_legacy()[1]["out"], 500)
+        self.assertIn('"walk"', self.error_log())
+
+    # -- error entries: cleared by a success, restarted by a changed mtime -------------------------
+    def test_a_successful_scan_clears_the_files_error_entry(self):
+        p = self.write("a.jsonl", self.lines())
+        calls, flaky = self.flaky_open(p, 1)
+        with mock.patch("builtins.open", flaky):
+            self.mod.refresh(NOW)
+            self.assertIn(str(p), self.mod.load_index()["errors"])
+            self.mod.refresh(NOW)
+        self.assertEqual(self.mod.load_index()["errors"], {})
+
+    def test_the_failure_count_restarts_when_the_files_mtime_changes(self):
+        p = self.write("a.jsonl", self.lines())
+        calls, flaky = self.flaky_open(p, 3)
+        with mock.patch("builtins.open", flaky):
+            self.mod.refresh(NOW)
+            self.mod.refresh(NOW)
+            self.assertEqual(self.mod.load_index()["errors"][str(p)][1], 2)
+            self.touch(p, NOW + timedelta(seconds=9))
+            self.mod.refresh(NOW)
+        mtime_ns, count = self.mod.load_index()["errors"][str(p)]
+        self.assertEqual(count, 1, "a changed file starts counting again")
+        self.assertEqual(mtime_ns, os.stat(p).st_mtime_ns)
+
+    # -- backoff file: quiet on the status path, reported by the refresher ----------------------------
+    def test_a_corrupt_backoff_file_is_silent_on_the_status_path_and_logged_by_the_refresher(self):
+        self.mod.BACKOFF_FILE.write_text("{not json")
+        for _ in range(20):
+            self.mod.main()
+        self.assertEqual(self.error_log(), "")
+        self.mod.refresh(NOW)
+        self.assertEqual(self.error_log().count("backoff-read"), 1)
+
+    # -- temp files and the lock file are never followed through a symlink -------------------------
+    def test_atomic_write_replaces_a_planted_symlink_instead_of_writing_through_it(self):
+        victim = self.state / "victim"
+        victim.write_text("keep")
+        tmp = self.mod.CACHE_FILE.with_name(f"{self.mod.CACHE_FILE.name}.{os.getpid()}.tmp")
+        tmp.symlink_to(victim)
+        self.mod.atomic_write(self.mod.CACHE_FILE, "new")
+        self.assertEqual(self.mod.CACHE_FILE.read_text(), "new")
+        self.assertEqual(victim.read_text(), "keep")
+
+    def test_the_lock_file_is_not_followed_through_a_symlink(self):
+        victim = self.state / "victim"
+        victim.write_text("keep")
+        self.mod.LOCK_FILE.symlink_to(victim)
+        with self.assertRaises(OSError):
+            self.mod.try_lock()
+        self.assertEqual(victim.read_text(), "keep")
 
 
 if __name__ == "__main__":

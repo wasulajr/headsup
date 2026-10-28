@@ -47,6 +47,8 @@ reads are many GiB, so it must never do a scan on the caller's path:
     line older than an hour, or one that is not a plain KEY=value line, is not printed.
   * A file whose read fails is retried on the next refreshes and parked only after 3 failures in
     a row at the same mtime. A failure to save the index fails the whole refresh instead.
+  * A directory that cannot be listed is skipped, as rglob skips it, but logged (stage "walk");
+    counts already in the index are kept.
   * A failed refresh is logged (headsup_usage_errors_<acct>.log in the state dir), keeps the
     last good cache, and backs off exponentially (1 minute up to 1 hour) instead of retrying
     on every status-line call. A malformed record is dropped and counted, not fatal.
@@ -359,22 +361,29 @@ def save_index(idx: dict) -> None:
     atomic_write(INDEX_FILE, json.dumps(out, separators=(",", ":")))
 
 
-def iter_transcripts(root):
+def iter_transcripts(root, on_error=None):
     """Yield (path, stat) for every *.jsonl file under root, like rglob("*.jsonl") but without
-    descending into SKIP_DIRS and without following directory symlinks."""
+    descending into SKIP_DIRS and without following directory symlinks. A directory that cannot
+    be listed (or stops listing part-way) is skipped, as rglob does, and reported to on_error."""
     stack = [str(root)]
     while stack:
         d = stack.pop()
         try:
             it = os.scandir(d)
-        except OSError:
+        except OSError as e:
+            if on_error:
+                on_error(d, e)
             continue
         with it:
             while True:
                 try:
                     e = next(it)
-                except (StopIteration, OSError):
-                    break               # end of listing, or it became unreadable part-way: keep what we have
+                except StopIteration:
+                    break
+                except OSError as err:
+                    if on_error:
+                        on_error(d, err)
+                    break               # unreadable part-way: keep what we have
                 try:
                     if e.is_dir(follow_symlinks=False):
                         if e.name not in SKIP_DIRS:
@@ -523,7 +532,8 @@ def update_index(idx: dict, w_ts: float, keep_ts: float, checkpoint, stats: dict
     index cannot be corrected in place and must be rebuilt from scratch."""
     files, slots, errors = idx["files"], idx["slots"], idx["errors"]
     seen = set()
-    for key, st in iter_transcripts(PROJECTS_DIR):
+    walk_errors = []
+    for key, st in iter_transcripts(PROJECTS_DIR, lambda d, e: walk_errors.append((d, e))):
         if st.st_mtime < w_ts:
             continue
         seen.add(key)
@@ -543,6 +553,10 @@ def update_index(idx: dict, w_ts: float, keep_ts: float, checkpoint, stats: dict
         reason = scan_file(key, st, start, expect, idx, checkpoint, stats)
         if reason:
             return reason
+    if walk_errors:
+        # Skipped like rglob skips them, but never silently: a listing that fails gives a fresh-looking
+        # line that is missing whatever that directory held (existing counts are kept in the index).
+        log_error("walk", walk_errors[0][1], path=walk_errors[0][0], count=len(walk_errors))
     for key in list(files):
         if key in seen:
             continue
@@ -618,12 +632,14 @@ def refresh(now: datetime = None) -> str:
     stats = {"bad": 0}
 
     def checkpoint():
+        idx["week"] = w_ts          # a checkpoint of a fresh index must not look like a stale week on restart
         try:
             save_index(idx)
         except OSError as e:
             raise CheckpointError(f"could not save the index at a checkpoint: {e}") from e
 
     read_cache(quiet=False)         # the status line reads quietly; a corrupt cache is logged here, once per run
+    backoff_remaining()             # likewise a corrupt or foreign backoff file
 
     idx = load_index()
     reason = "periodic" if time.time() - idx["built_at"] > REBUILD_SEC else None
@@ -681,7 +697,7 @@ def start_refresher() -> None:
     try:
         # The backoff file lives on the disk a failing refresh may be unable to write, so this
         # throttle needs no disk space: the last launch time is the lock file's own mtime.
-        if time.time() - os.fstat(fd).st_mtime < SPAWN_GAP_SEC:
+        if 0 <= time.time() - os.fstat(fd).st_mtime < SPAWN_GAP_SEC:   # a stamp from the future has expired
             return
         os.utime(fd)
         import subprocess
