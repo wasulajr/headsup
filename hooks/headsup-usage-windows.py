@@ -28,7 +28,9 @@ reads are many GiB, so it must never do a scan on the caller's path:
     immediately (stale-while-revalidate).
   * Single-flight by flock: the refresher holds an exclusive flock on a lock file that the
     parent hands to it. The kernel drops the lock when the holder dies, however it dies, so
-    there is no stale-lock guessing. A worker is killed after 30 minutes (SIGALRM).
+    there is no stale-lock guessing. A worker still running after 30 minutes is stopped by a
+    SIGALRM watchdog. That cannot interrupt a read stuck in the kernel (a hung network volume):
+    callers then keep serving the last cache until it is an hour old, and print nothing after.
   * Incremental: a per-file byte-offset index means only bytes appended since the last
     refresh are read. A line is JSON-parsed only if it contains "usage". Counts and the
     offset that produced them are committed together (and checkpointed during a long
@@ -43,6 +45,8 @@ reads are many GiB, so it must never do a scan on the caller's path:
     under projects/ and none of the transcripts), instead of rglob over everything.
   * First run (no cache yet): prints nothing while the refresher builds the index. A cached
     line older than an hour, or one that is not a plain KEY=value line, is not printed.
+  * A file whose read fails is retried on the next refreshes and parked only after 3 failures in
+    a row at the same mtime. A failure to save the index fails the whole refresh instead.
   * A failed refresh is logged (headsup_usage_errors_<acct>.log in the state dir), keeps the
     last good cache, and backs off exponentially (1 minute up to 1 hour) instead of retrying
     on every status-line call. A malformed record is dropped and counted, not fatal.
@@ -80,7 +84,8 @@ _ACCT_KEY      = hashlib.sha256(str(PROJECTS_DIR.resolve()).encode()).hexdigest(
 STATE_DIR      = Path(os.environ.get("HEADSUP_USAGE_STATE_DIR") or "/tmp")
 CACHE_FILE     = STATE_DIR / f"headsup_usage_cache_{_ACCT_KEY}.json"
 INDEX_FILE     = STATE_DIR / f"headsup_usage_index_{_ACCT_KEY}.json"
-LOCK_FILE      = STATE_DIR / f"headsup_usage_lock_{_ACCT_KEY}"
+# "flock", not "lock": an earlier iteration made a DIRECTORY named headsup_usage_lock_<acct>.
+LOCK_FILE      = STATE_DIR / f"headsup_usage_flock_{_ACCT_KEY}"
 BACKOFF_FILE   = STATE_DIR / f"headsup_usage_backoff_{_ACCT_KEY}.json"
 ERROR_LOG      = STATE_DIR / f"headsup_usage_errors_{_ACCT_KEY}.log"
 
@@ -92,10 +97,16 @@ CHECKPOINT_SEC  = 20      # how often a long build commits and saves the index
 REBUILD_SEC     = 86400   # full rebuild at least this often (bounds any undetected drift)
 MAX_RUN_SEC     = 1800    # a worker still running after this is killed
 MAX_BACKOFF_SEC = 3600
+SPAWN_GAP_SEC   = 20      # least time between worker launches, stamped on the lock file itself
+FILE_ERROR_MAX  = 3       # failed reads of one file, in a row, before it is parked
+ERROR_LOG_MAX   = 262144
+ERROR_LOG_KEEP  = 65536   # a truncated log keeps this much of its tail
 SKIP_DIRS       = {"tool-results"}   # persisted tool output, never a transcript
 
 # The only shape the status line may eval: KEY=value pairs of plain characters.
-OUTPUT_RE = re.compile(r"[A-Z_]+=[A-Za-z0-9.:%-]*(?: [A-Z_]+=[A-Za-z0-9.:%-]*)*")
+_KEYS = ("SESSION_PCT|SESSION_USED|SESSION_LIMIT_FMT|SESSION_COST|WEEK_PCT|WEEK_USED|"
+         "WEEK_LIMIT_FMT|WEEK_COST|SESSION_RESET")
+OUTPUT_RE = re.compile(rf"(?:{_KEYS})=[A-Za-z0-9.:%-]*(?: (?:{_KEYS})=[A-Za-z0-9.:%-]*)*")
 
 KILL_FLAGS = (
     CONFIG_DIR / "hooks" / ".headsup-usage-disabled",
@@ -192,8 +203,11 @@ def log_error(stage: str, exc: BaseException = None, **extra) -> None:
             rec["error"] = f"{type(exc).__name__}: {exc}"
             rec["trace"] = traceback.format_exc()[-1500:]
         rec.update(extra)
-        if ERROR_LOG.exists() and ERROR_LOG.stat().st_size > 262144:
-            ERROR_LOG.write_text("")
+        if ERROR_LOG.exists() and ERROR_LOG.stat().st_size > ERROR_LOG_MAX:
+            with ERROR_LOG.open("rb") as old:
+                old.seek(-ERROR_LOG_KEEP, os.SEEK_END)
+                tail = old.read().split(b"\n", 1)[-1]      # drop the cut first line
+            ERROR_LOG.write_bytes(tail)
         with ERROR_LOG.open("a") as fh:
             fh.write(json.dumps(rec) + "\n")
     except Exception:  # noqa: BLE001 (deliberate, see docstring)
@@ -204,7 +218,11 @@ def atomic_write(path: Path, text: str) -> None:
     """Write 0600 to a temp name and rename over path; the temp file never outlives a failure."""
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.unlink(tmp)      # a leftover from a killed run with a recycled pid
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
         os.replace(tmp, path)
@@ -216,20 +234,24 @@ def atomic_write(path: Path, text: str) -> None:
         raise
 
 
-def read_json_file(path: Path, stage: str):
-    """Parsed JSON object from a file this user owns, or None. Corruption is logged."""
+def read_json_file(path: Path, stage: str, quiet: bool = False):
+    """Parsed JSON object from a file this user owns, or None. Corruption is logged, except on
+    the status-line path (quiet): that runs on every call, and the refresher logs it instead."""
     try:
         if os.stat(path).st_uid != os.getuid():
-            log_error(stage, reason="not-owned", path=str(path))
+            if not quiet:
+                log_error(stage, reason="not-owned", path=str(path))
             return None
         d = json.loads(Path(path).read_text())
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as e:
-        log_error(stage, e)
+        if not quiet:
+            log_error(stage, e)
         return None
     if not isinstance(d, dict):
-        log_error(stage, reason="not-an-object", path=str(path))
+        if not quiet:
+            log_error(stage, reason="not-an-object", path=str(path))
         return None
     return d
 
@@ -241,7 +263,18 @@ def try_lock():
     flock belongs to the open file description, so it survives being handed to a child and
     is released by the kernel when the last holder exits or dies."""
     import fcntl
-    fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
+    flags = os.O_RDWR | os.O_NOFOLLOW
+    try:
+        fd = os.open(LOCK_FILE, flags | os.O_CREAT | os.O_EXCL, 0o600)
+        os.utime(fd, (0, 0))        # never launched: SPAWN_GAP_SEC must not throttle the first launch
+    except FileExistsError:
+        fd = os.open(LOCK_FILE, flags)
+    if fd < 3:
+        # stdin/stdout/stderr may be closed in an odd launch context; the child's DEVNULL
+        # redirects would then land on the lock and silently drop it.
+        moved = fcntl.fcntl(fd, getattr(fcntl, "F_DUPFD_CLOEXEC", fcntl.F_DUPFD), 3)
+        os.close(fd)
+        fd = moved
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -256,7 +289,9 @@ def inherited_lock_fd():
         return None
     try:
         fd = int(raw)
-        os.fstat(fd)
+        held, named = os.fstat(fd), os.stat(LOCK_FILE)
+        if (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino):
+            return None             # an unrelated descriptor, not this account's lock
         return fd
     except (ValueError, OSError):
         return None
@@ -264,12 +299,12 @@ def inherited_lock_fd():
 
 # ── failure backoff ──────────────────────────────────────────────────────────
 
-def backoff_remaining() -> float:
-    d = read_json_file(BACKOFF_FILE, "backoff-read")
+def backoff_remaining(quiet: bool = False) -> float:
+    d = read_json_file(BACKOFF_FILE, "backoff-read", quiet=quiet)
     until = d.get("until") if d else None
     if isinstance(until, bool) or not isinstance(until, (int, float)):
         return 0.0
-    return max(0.0, until - time.time())
+    return max(0.0, min(float(MAX_BACKOFF_SEC), until - time.time()))   # a wrong clock cannot ban us for years
 
 
 def note_failure() -> None:
@@ -295,7 +330,7 @@ def clear_backoff() -> None:
 # ── incremental index ────────────────────────────────────────────────────────
 
 def fresh_index() -> dict:
-    return {"v": INDEX_VERSION, "built_at": time.time(), "files": {}, "slots": {}, "errors": {}}
+    return {"v": INDEX_VERSION, "built_at": time.time(), "week": None, "files": {}, "slots": {}, "errors": {}}
 
 
 def load_index() -> dict:
@@ -309,15 +344,17 @@ def load_index() -> dict:
                 for rec in d["files"].values():
                     if len(rec) != 5:
                         raise ValueError("bad file record")
-                return {"v": d["v"], "built_at": d["built_at"], "files": d["files"],
-                        "slots": slots, "errors": d.get("errors", {})}
+                errors = {k: v for k, v in d.get("errors", {}).items()
+                          if isinstance(v, list) and len(v) == 2 and all(isinstance(x, int) for x in v)}
+                return {"v": d["v"], "built_at": d["built_at"], "week": d.get("week"), "files": d["files"],
+                        "slots": slots, "errors": errors}
         except (ValueError, TypeError, IndexError, KeyError) as e:
             log_error("index-load", e)
     return fresh_index()
 
 
 def save_index(idx: dict) -> None:
-    out = {"v": idx["v"], "built_at": idx["built_at"], "files": idx["files"],
+    out = {"v": idx["v"], "built_at": idx["built_at"], "week": idx.get("week"), "files": idx["files"],
            "slots": {str(k): v for k, v in idx["slots"].items()}, "errors": idx["errors"]}
     atomic_write(INDEX_FILE, json.dumps(out, separators=(",", ":")))
 
@@ -333,7 +370,11 @@ def iter_transcripts(root):
         except OSError:
             continue
         with it:
-            for e in it:
+            while True:
+                try:
+                    e = next(it)
+                except (StopIteration, OSError):
+                    break               # end of listing, or it became unreadable part-way: keep what we have
                 try:
                     if e.is_dir(follow_symlinks=False):
                         if e.name not in SKIP_DIRS:
@@ -468,9 +509,12 @@ def scan_file(key: str, st, off: int, expect_fp: str, idx: dict, checkpoint, sta
                     checkpoint()
                     next_ck = time.monotonic() + CHECKPOINT_SEC
             commit(True)
+        idx["errors"].pop(key, None)
     except OSError as e:
         log_error("scan", e, path=key)
-        idx["errors"][key] = st.st_mtime_ns   # do not retry (or re-log) until the file changes
+        prev = idx["errors"].get(key)
+        n = prev[1] + 1 if prev and prev[0] == st.st_mtime_ns else 1
+        idx["errors"][key] = [st.st_mtime_ns, n]    # parked once n reaches FILE_ERROR_MAX
     return None
 
 
@@ -483,8 +527,9 @@ def update_index(idx: dict, w_ts: float, keep_ts: float, checkpoint, stats: dict
         if st.st_mtime < w_ts:
             continue
         seen.add(key)
-        if errors.get(key) == st.st_mtime_ns:
-            continue
+        parked = errors.get(key)
+        if parked and parked[0] == st.st_mtime_ns and parked[1] >= FILE_ERROR_MAX:
+            continue                # failed repeatedly; retried only when the file changes
         rec = files.get(key)
         start, expect = 0, ""
         if rec is not None:
@@ -504,7 +549,7 @@ def update_index(idx: dict, w_ts: float, keep_ts: float, checkpoint, stats: dict
         try:
             st = os.stat(key)
         except OSError:
-            if files[key][3] / 1e9 >= w_ts:
+            if files[key][3] == 0 or files[key][3] / 1e9 >= w_ts:     # 0: only a checkpoint was saved
                 return "in-week-file-vanished"    # its past usage cannot be subtracted
             del files[key]
             continue
@@ -559,6 +604,11 @@ def build_output(now: datetime, s: dict, w: dict) -> str:
     ])
 
 
+class CheckpointError(Exception):
+    """The index could not be saved part-way through a build: the refresh fails (and backs off),
+    which is not the transcript's fault and must not park the file being read."""
+
+
 def refresh(now: datetime = None) -> str:
     """Update the index, write it and the output cache atomically, return the output line."""
     now = now or datetime.now(timezone.utc)
@@ -568,10 +618,17 @@ def refresh(now: datetime = None) -> str:
     stats = {"bad": 0}
 
     def checkpoint():
-        save_index(idx)
+        try:
+            save_index(idx)
+        except OSError as e:
+            raise CheckpointError(f"could not save the index at a checkpoint: {e}") from e
+
+    read_cache(quiet=False)         # the status line reads quietly; a corrupt cache is logged here, once per run
 
     idx = load_index()
     reason = "periodic" if time.time() - idx["built_at"] > REBUILD_SEC else None
+    if reason is None and idx["files"] and idx.get("week") != w_ts:
+        reason = "week-rolled"      # files that aged out of the week still hold slots the old scan ignored
     if reason is None:
         reason = update_index(idx, w_ts, keep_ts, checkpoint, stats)
     if reason:
@@ -586,6 +643,7 @@ def refresh(now: datetime = None) -> str:
     output = build_output(now, s, w)
     if not OUTPUT_RE.fullmatch(output):
         raise RuntimeError("refusing to cache an output line that is not plain KEY=value pairs")
+    idx["week"] = w_ts
     save_index(idx)
     atomic_write(CACHE_FILE, json.dumps({"ts": now.timestamp(), "output": output}))
     if stats["bad"]:
@@ -595,21 +653,22 @@ def refresh(now: datetime = None) -> str:
 
 # ── entry points ─────────────────────────────────────────────────────────────
 
-def read_cache():
-    d = read_json_file(CACHE_FILE, "cache-read")
+def read_cache(quiet: bool = True):
+    d = read_json_file(CACHE_FILE, "cache-read", quiet=quiet)
     if d is None:
         return None
     ts, out = d.get("ts"), d.get("output")
     if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not math.isfinite(ts) \
             or not isinstance(out, str) or not OUTPUT_RE.fullmatch(out):
-        log_error("cache-read", reason="invalid-fields")
+        if not quiet:
+            log_error("cache-read", reason="invalid-fields")
         return None
     return d
 
 
 def start_refresher() -> None:
     """Spawn the detached worker unless one already holds the lock or we are backing off."""
-    if backoff_remaining() > 0:
+    if backoff_remaining(quiet=True) > 0:
         return
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -620,6 +679,11 @@ def start_refresher() -> None:
     if fd is None:
         return
     try:
+        # The backoff file lives on the disk a failing refresh may be unable to write, so this
+        # throttle needs no disk space: the last launch time is the lock file's own mtime.
+        if time.time() - os.fstat(fd).st_mtime < SPAWN_GAP_SEC:
+            return
+        os.utime(fd)
         import subprocess
         subprocess.Popen(
             [sys.executable, os.path.abspath(__file__), "--refresh"],
@@ -631,6 +695,11 @@ def start_refresher() -> None:
         log_error("spawn", e)
     finally:
         os.close(fd)     # the child keeps the lock through its inherited copy
+
+
+class RefreshTimeout(BaseException):
+    """The watchdog fired. A BaseException on purpose: the `except OSError`/`except Exception`
+    handlers on the scan path must not swallow it (TimeoutError is an OSError and would be)."""
 
 
 def run_refresh(sync: bool) -> int:
@@ -649,7 +718,7 @@ def run_refresh(sync: bool) -> int:
         return 0
 
     def on_alarm(signum, frame):
-        raise TimeoutError(f"refresh still running after {MAX_RUN_SEC}s")
+        raise RefreshTimeout(f"refresh still running after {MAX_RUN_SEC}s")
 
     try:
         signal.signal(signal.SIGALRM, on_alarm)
@@ -660,7 +729,7 @@ def run_refresh(sync: bool) -> int:
             pass  # lowering priority is a courtesy; the refresh is still correct without it
         output = refresh()
         clear_backoff()
-    except Exception as e:  # noqa: BLE001 (logged; the last good cache keeps being served)
+    except (Exception, RefreshTimeout) as e:  # noqa: BLE001 (logged; the last good cache keeps being served)
         log_error("refresh", e)
         note_failure()
         if sync:

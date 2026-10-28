@@ -389,6 +389,7 @@ class Incremental(Base):
         idx = self.mod.load_index()
         cutoff = int(min(self.mod.week_start(later), self.mod.block_start(later)).timestamp()) // self.mod.BUCKET_SEC
         self.assertTrue(all(k >= cutoff for k in idx["slots"]))
+        self.assertEqual(sum(o for o, _ in idx["slots"].values()), 2, "the recent event survives, the old one is gone")
 
 
 class Atomicity(Base):
@@ -516,7 +517,9 @@ class SingleFlightAndCaching(Base):
             self.write_cache(5, output=evil)
             self.mod.main()
             self.assertEqual(self.out, [], repr(evil))
-        self.assertIn("invalid-fields", self.error_log())
+        self.assertEqual(self.error_log(), "", "the status-line path never writes the error log")
+        self.mod.refresh(NOW)                      # the refresher is what reports the bad cache, once
+        self.assertEqual(self.error_log().count("invalid-fields"), 1)
 
     def test_non_object_json_in_cache_or_index_is_corrupt_not_a_crash(self):
         # Review finding 4.
@@ -687,6 +690,266 @@ class EndToEnd(Base):
         r2 = self.run_script()
         self.assertIn("WEEK_USED=250", r2.stdout)
         self.assertEqual(self.error_log(), "", "unexpected errors logged")
+
+
+class Revision3(Base):
+    """Second independent review (adversarial pass on e7a11dd): each finding, plus the behaviours
+    that review showed had no test at all."""
+    def setUp(self):
+        super().setUp()
+        self.popen_calls = []
+        outer = self
+        class FakePopen:             # a child that exits at once: it never keeps the lock
+            def __init__(inner, *a, **k):
+                outer.popen_calls.append((a, k))
+        import subprocess as sp
+        p = mock.patch.object(sp, "Popen", FakePopen)
+        p.start()
+        self.addCleanup(p.stop)
+        for target, val in ((sys, {"argv": ["x"]}), ):
+            pa = mock.patch.dict(vars(target), val)
+            pa.start()
+            self.addCleanup(pa.stop)
+        nice = mock.patch.object(os, "nice", lambda n: 0)
+        nice.start()
+        self.addCleanup(nice.stop)
+
+    def lines(self, n=50):
+        return [assistant(NOW - timedelta(minutes=60 - i), out=10) for i in range(n)]
+
+    # -- finding 1: the watchdog must reach run_refresh ---------------------------------------
+    def test_the_watchdog_is_not_swallowed_by_the_scan_handlers(self):
+        self.write("a.jsonl", self.lines(3))
+        self.mod.MAX_RUN_SEC = 1
+        real = self.mod.parse_usage_line
+        def hang(line):
+            time.sleep(5)            # inside scan_file's `except OSError`: TimeoutError would be swallowed here
+            return real(line)
+        self.mod.parse_usage_line = hang
+        t0 = time.monotonic()
+        self.assertEqual(self.mod.run_refresh(sync=False), 1)
+        self.assertLess(time.monotonic() - t0, 3.5, "stopped by the alarm, not after the sleep")
+        self.assertIn("RefreshTimeout", self.error_log())
+        self.assertGreater(self.mod.backoff_remaining(), 0)
+
+    # -- finding 2: the lock must not sit on a standard descriptor -----------------------------
+    def test_the_lock_never_lands_on_stdin_or_stdout(self):
+        for std in (0, 1):
+            saved = os.dup(std)
+            os.close(std)
+            try:
+                fd = self.mod.try_lock()
+            finally:
+                os.dup2(saved, std)
+                os.close(saved)
+            self.assertIsNotNone(fd)
+            self.assertGreaterEqual(fd, 3, f"lock opened while fd {std} was closed")
+            os.close(fd)
+
+    def test_an_inherited_descriptor_must_be_this_accounts_lock_file(self):
+        real = self.mod.try_lock()
+        other = os.open(self.state / "other", os.O_CREAT | os.O_RDWR)
+        try:
+            with mock.patch.dict(os.environ, {"HEADSUP_USAGE_LOCK_FD": str(other)}):
+                self.assertIsNone(self.mod.inherited_lock_fd())
+            with mock.patch.dict(os.environ, {"HEADSUP_USAGE_LOCK_FD": str(real)}):
+                self.assertEqual(self.mod.inherited_lock_fd(), real)
+        finally:
+            os.close(other)
+            os.close(real)
+
+    # -- finding 3: a transient error must not become a lasting undercount ----------------------
+    def flaky_open(self, path, fail_times):
+        calls = {"n": 0}
+        real_open = open
+        def flaky(file, *a, **k):
+            if str(file) == str(path):
+                calls["n"] += 1
+                if calls["n"] <= fail_times:
+                    raise OSError(5, "EIO")
+            return real_open(file, *a, **k)
+        return calls, flaky
+
+    def test_a_transient_read_error_is_retried_on_the_next_refresh(self):
+        p = self.write("a.jsonl", self.lines())
+        calls, flaky = self.flaky_open(p, 1)
+        with mock.patch("builtins.open", flaky):
+            self.mod.refresh(NOW)
+            self.assertEqual(self.totals()[1]["out"], 0)
+            self.mod.refresh(NOW)                       # same mtime: it is retried anyway
+        ns, nw = self.assert_matches_legacy()
+        self.assertEqual(nw["out"], 500)
+
+    def test_a_file_that_keeps_failing_is_parked_until_it_changes(self):
+        p = self.write("a.jsonl", self.lines())
+        calls, flaky = self.flaky_open(p, 99)
+        with mock.patch("builtins.open", flaky):
+            for _ in range(self.mod.FILE_ERROR_MAX + 3):
+                self.mod.refresh(NOW)
+        self.assertEqual(calls["n"], self.mod.FILE_ERROR_MAX, "parked after FILE_ERROR_MAX failures in a row")
+        self.touch(p, NOW + timedelta(seconds=9))        # the file changes: retried
+        self.mod.refresh(NOW)
+        self.assertEqual(self.assert_matches_legacy()[1]["out"], 500)
+
+    def test_a_checkpoint_save_failure_fails_the_refresh_and_never_parks_the_file(self):
+        self.write("a.jsonl", self.lines())
+        self.mod.CHECKPOINT_SEC = 0
+        real_save, state = self.mod.save_index, {"n": 0}
+        def save(idx):
+            state["n"] += 1
+            if state["n"] == 1:
+                raise OSError(28, "No space left on device")
+            return real_save(idx)
+        self.mod.save_index = save
+        with self.assertRaises(self.mod.CheckpointError):
+            self.mod.refresh(NOW)
+        self.assertEqual(self.mod.load_index()["errors"], {}, "the file is not blamed for a full disk")
+        self.mod.refresh(NOW)
+        self.assertEqual(self.assert_matches_legacy()[1]["out"], 500)
+
+    def test_malformed_parked_entries_in_a_saved_index_are_dropped(self):
+        self.write("a.jsonl", self.lines(3))
+        self.mod.refresh(NOW)
+        d = json.loads(self.mod.INDEX_FILE.read_text())
+        d["errors"] = {"x": 5, "y": [1, "z"], "z": [1, 2]}
+        self.mod.INDEX_FILE.write_text(json.dumps(d))
+        self.assertEqual(self.mod.load_index()["errors"], {"z": [1, 2]})
+
+    # -- finding 4: a vanished file whose only record is a checkpoint -------------------------
+    def test_a_file_that_vanishes_after_a_checkpoint_is_not_left_in_the_totals(self):
+        p = self.write("a.jsonl", self.lines())
+        self.mod.CHECKPOINT_SEC = 0
+        real, state = self.mod.parse_usage_line, {"n": 0}
+        def failing(line):
+            state["n"] += 1
+            if state["n"] == 30:
+                raise OSError(5, "EIO")
+            return real(line)
+        self.mod.parse_usage_line = failing
+        self.mod.refresh(NOW)
+        self.assertEqual(self.totals()[1]["out"], 290, "29 lines committed before the failure")
+        p.unlink()
+        self.mod.parse_usage_line = real
+        self.mod.refresh(NOW)
+        self.assertEqual(self.assert_matches_legacy()[1]["out"], 0)
+
+    # -- finding 5: backoff clamp, and a throttle that needs no disk space -------------------
+    def test_a_far_future_backoff_is_clamped(self):
+        self.mod.atomic_write(self.mod.BACKOFF_FILE, json.dumps({"n": 9, "until": time.time() + 10 ** 9}))
+        self.assertLessEqual(self.mod.backoff_remaining(), self.mod.MAX_BACKOFF_SEC)
+
+    def test_relaunches_stay_throttled_when_the_backoff_file_cannot_be_written(self):
+        def boom(*a, **k):
+            raise OSError("disk on fire")
+        self.mod.update_index = boom
+        with mock.patch.object(self.mod, "atomic_write", side_effect=OSError(28, "No space left on device")):
+            self.assertEqual(self.mod.run_refresh(sync=False), 1)
+        self.assertFalse(self.mod.BACKOFF_FILE.exists(), "the premise: no backoff could be recorded")
+        for _ in range(30):
+            self.mod.main()
+        self.assertEqual(len(self.popen_calls), 1, "one launch per SPAWN_GAP_SEC, not one per call")
+
+    def test_the_first_launch_is_not_throttled_by_a_fresh_lock_file(self):
+        self.mod.main()
+        self.assertEqual(len(self.popen_calls), 1)
+
+    # -- finding 6: log hygiene -----------------------------------------------------------------
+    def test_the_status_line_path_never_logs_a_corrupt_cache(self):
+        self.mod.CACHE_FILE.write_text("{not json")
+        for _ in range(50):
+            self.mod.main()
+        self.assertEqual(self.error_log(), "")
+
+    def test_a_trimmed_error_log_keeps_whole_newest_lines(self):
+        prev, trimmed_at = 0, None
+        for i in range(300):
+            self.mod.log_error("spam", reason="x" * 1000, i=i)
+            size = self.mod.ERROR_LOG.stat().st_size
+            if size < prev and trimmed_at is None:
+                trimmed_at = i
+            prev = size
+        self.assertIsNotNone(trimmed_at, "the log was trimmed at some point")
+        log = self.error_log()
+        self.assertLess(len(log), self.mod.ERROR_LOG_MAX + 2000)
+        self.assertIn('"i": 299', log)
+        self.assertIn(f'"i": {trimmed_at - 1}', log, "the line written just before the trim is kept")
+        for line in log.splitlines():
+            json.loads(line)         # no line was cut in half
+
+    # -- finding 7: a directory left at the old lock name ------------------------------------
+    def test_a_leftover_lock_directory_from_the_earlier_iteration_does_not_wedge_us(self):
+        (self.state / f"headsup_usage_lock_{self.mod._ACCT_KEY}").mkdir()
+        self.mod.main()
+        self.assertEqual(len(self.popen_calls), 1)
+
+    # -- finding 8: the walk survives an error part-way through a listing ----------------------
+    def test_a_directory_listing_that_fails_part_way_keeps_what_it_has(self):
+        for n in ("a", "b", "c"):
+            self.write(f"{n}.jsonl", self.lines(2))
+        real_scandir = os.scandir
+        def flaky(path):
+            it = real_scandir(path)
+            class Wrapper:
+                sent = 0
+                def __enter__(s):
+                    it.__enter__()
+                    return s
+                def __exit__(s, *a):
+                    return it.__exit__(*a)
+                def __iter__(s):
+                    return s
+                def __next__(s):
+                    if s.sent >= 1:
+                        raise OSError(5, "EIO")
+                    s.sent += 1
+                    return next(it)
+            return Wrapper()
+        with mock.patch.object(os, "scandir", flaky):
+            found = list(self.mod.iter_transcripts(self.mod.PROJECTS_DIR))
+        self.assertEqual(len(found), 1)
+
+    # -- finding 9: a week rollover must agree with the original scan -----------------------------
+    def test_the_week_rolling_over_rebuilds_so_an_aged_out_file_stops_counting(self):
+        before = datetime(2026, 10, 26, 20, 45, tzinfo=timezone.utc)    # still last week
+        self.write("a.jsonl", [assistant(datetime(2026, 10, 26, 20, 0, tzinfo=timezone.utc), out=1000)],
+                   when=datetime(2026, 10, 26, 20, 30, tzinfo=timezone.utc))
+        self.mod.refresh(before)
+        self.mod.refresh(MON)                                           # week start 21:00Z has passed
+        ns, nw = self.assert_matches_legacy(MON)
+        self.assertEqual(ns["out"], 0, "the original ignores a file idle since before the week")
+        self.assertIn('"week-rolled"', self.error_log())
+
+    # -- behaviours the review showed untested ----------------------------------------------------
+    def test_only_the_nine_known_keys_may_be_evaled(self):
+        for bad in ("PATH=.", "IFS=", "SESSION_PCT=1 PATH=.", "LD_PRELOAD=x"):
+            self.assertIsNone(self.mod.OUTPUT_RE.fullmatch(bad), bad)
+        good = self.mod.build_output(NOW, {"out": 5, "cost": 0.0}, {"out": 9, "cost": 1.0})
+        self.assertIsNotNone(self.mod.OUTPUT_RE.fullmatch(good), good)
+
+    def test_a_state_file_owned_by_someone_else_is_refused(self):
+        self.mod.atomic_write(self.mod.CACHE_FILE, json.dumps({"ts": time.time(), "output": "SESSION_PCT=1"}))
+        with mock.patch.object(os, "getuid", return_value=os.getuid() + 1):
+            self.assertIsNone(self.mod.read_json_file(self.mod.CACHE_FILE, "t"))
+        self.assertIn("not-owned", self.error_log())
+
+    def _edit_and_append(self, offset_from):
+        p = self.write("a.jsonl", self.lines())
+        self.mod.refresh(NOW)
+        data = bytearray(p.read_bytes())
+        i = offset_from if offset_from >= 0 else len(data) + offset_from
+        data[i] = data[i] + 1 if data[i] < 126 else data[i] - 1         # same size, still a printable byte
+        data += (json.dumps(assistant(NOW - timedelta(minutes=1), out=10)) + "\n").encode()
+        p.write_bytes(bytes(data))
+        self.touch(p, NOW + timedelta(seconds=30))
+        self.mod.refresh(NOW)
+
+    def test_an_edit_inside_the_head_is_caught_by_the_fingerprint(self):
+        self._edit_and_append(10)
+        self.assertIn('"fingerprint"', self.error_log())
+
+    def test_an_edit_inside_the_tail_before_the_offset_is_caught_by_the_fingerprint(self):
+        self._edit_and_append(-6)
+        self.assertIn('"fingerprint"', self.error_log())
 
 
 if __name__ == "__main__":
