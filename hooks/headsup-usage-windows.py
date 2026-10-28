@@ -26,33 +26,45 @@ reads are many GiB, so it must never do a scan on the caller's path:
   * A call prints the last cached result and returns. When that result is older than
     HEADSUP_USAGE_TTL (60s) it starts ONE detached, niced refresher and still returns
     immediately (stale-while-revalidate).
-  * Single-flight: the refresher holds an atomic lock directory (with a heartbeat), so a
-    burst of windows hitting an expired cache starts one refresh, not one per window.
+  * Single-flight by flock: the refresher holds an exclusive flock on a lock file that the
+    parent hands to it. The kernel drops the lock when the holder dies, however it dies, so
+    there is no stale-lock guessing. A worker is killed after 30 minutes (SIGALRM).
   * Incremental: a per-file byte-offset index means only bytes appended since the last
-    refresh are read. A line is JSON-parsed only if it contains "usage".
+    refresh are read. A line is JSON-parsed only if it contains "usage". Counts and the
+    offset that produced them are committed together (and checkpointed during a long
+    build), so a failure or kill part-way through a file never double counts.
   * Totals are kept in one-minute buckets, so any window is a sum over buckets. That is
-    exact because the session and week boundaries fall on whole minutes.
-  * First run (no cache yet): prints nothing while the refresher builds the index, which
-    checkpoints as it goes. A result older than an hour is not shown (blank beats wrong).
-  * Failures are appended to headsup_usage_errors_<acct>.log in the state dir; the last
-    good result keeps being served.
+    exact because the session and week boundaries fall on whole minutes. Buckets are kept
+    back to the EARLIER of the two window starts (the session block can start before the week).
+  * The index is rebuilt from scratch when a file shrinks, is replaced, vanishes, goes back in
+    time, or no longer matches its head/tail fingerprint, and once a day regardless, which
+    bounds any drift an in-place edit could cause.
+  * The walk skips tool-results directories (persisted tool output; about 85% of the files
+    under projects/ and none of the transcripts), instead of rglob over everything.
+  * First run (no cache yet): prints nothing while the refresher builds the index. A cached
+    line older than an hour, or one that is not a plain KEY=value line, is not printed.
+  * A failed refresh is logged (headsup_usage_errors_<acct>.log in the state dir), keeps the
+    last good cache, and backs off exponentially (1 minute up to 1 hour) instead of retrying
+    on every status-line call. A malformed record is dropped and counted, not fatal.
   * Kill switch: HEADSUP_USAGE_DISABLE=1, or a file named hooks/.headsup-usage-disabled
     under the config dir (or ~/.claude), makes it print nothing and do nothing.
 
-State (cache, index, lock, error log) is regenerable scratch in /tmp, keyed by account;
-HEADSUP_USAGE_STATE_DIR overrides the directory. `--sync` runs one refresh in the
-foreground and prints the result (for tests and benchmarking); `--refresh` is the
-detached worker.
+Known differences from the old full scan: a bare carriage return between records is not a
+record separator, an escaped "usage" key is not matched by the prefilter, and a .jsonl file
+inside a tool-results directory is not read. None of these occur in Claude Code transcripts.
+
+State (cache, index, lock, backoff, error log) is regenerable scratch in /tmp, keyed by
+account; HEADSUP_USAGE_STATE_DIR overrides the directory. `--sync` runs one refresh in the
+foreground and prints the result (for tests and benchmarking); `--refresh` is the detached worker.
 """
 
 import hashlib
 import json
+import math
 import os
-import shutil
-import subprocess
+import re
 import sys
 import time
-import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -68,15 +80,22 @@ _ACCT_KEY      = hashlib.sha256(str(PROJECTS_DIR.resolve()).encode()).hexdigest(
 STATE_DIR      = Path(os.environ.get("HEADSUP_USAGE_STATE_DIR") or "/tmp")
 CACHE_FILE     = STATE_DIR / f"headsup_usage_cache_{_ACCT_KEY}.json"
 INDEX_FILE     = STATE_DIR / f"headsup_usage_index_{_ACCT_KEY}.json"
-LOCK_DIR       = STATE_DIR / f"headsup_usage_lock_{_ACCT_KEY}"
+LOCK_FILE      = STATE_DIR / f"headsup_usage_lock_{_ACCT_KEY}"
+BACKOFF_FILE   = STATE_DIR / f"headsup_usage_backoff_{_ACCT_KEY}.json"
 ERROR_LOG      = STATE_DIR / f"headsup_usage_errors_{_ACCT_KEY}.log"
 
-CACHE_TTL_SEC  = int(os.environ.get("HEADSUP_USAGE_TTL", 60))
-MAX_STALE_SEC  = 3600     # an older cached result is not shown at all
-LOCK_STALE_SEC = 600      # no heartbeat for this long: the holder is presumed dead
-BUCKET_SEC     = 60       # window starts must be whole-minute aligned (they are)
-INDEX_VERSION  = 1
-CHECKPOINT_SEC = 20       # how often a long build saves the index and beats the lock
+CACHE_TTL_SEC   = int(os.environ.get("HEADSUP_USAGE_TTL", 60))
+MAX_STALE_SEC   = 3600    # an older cached result is not shown at all
+BUCKET_SEC      = 60      # window starts must be whole-minute aligned (they are)
+INDEX_VERSION   = 2
+CHECKPOINT_SEC  = 20      # how often a long build commits and saves the index
+REBUILD_SEC     = 86400   # full rebuild at least this often (bounds any undetected drift)
+MAX_RUN_SEC     = 1800    # a worker still running after this is killed
+MAX_BACKOFF_SEC = 3600
+SKIP_DIRS       = {"tool-results"}   # persisted tool output, never a transcript
+
+# The only shape the status line may eval: KEY=value pairs of plain characters.
+OUTPUT_RE = re.compile(r"[A-Z_]+=[A-Za-z0-9.:%-]*(?: [A-Z_]+=[A-Za-z0-9.:%-]*)*")
 
 KILL_FLAGS = (
     CONFIG_DIR / "hooks" / ".headsup-usage-disabled",
@@ -169,6 +188,7 @@ def log_error(stage: str, exc: BaseException = None, **extra) -> None:
     try:
         rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "stage": stage, "pid": os.getpid()}
         if exc is not None:
+            import traceback
             rec["error"] = f"{type(exc).__name__}: {exc}"
             rec["trace"] = traceback.format_exc()[-1500:]
         rec.update(extra)
@@ -181,123 +201,167 @@ def log_error(stage: str, exc: BaseException = None, **extra) -> None:
 
 
 def atomic_write(path: Path, text: str) -> None:
+    """Write 0600 to a temp name and rename over path; the temp file never outlives a failure."""
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(text)
-    os.replace(tmp, path)
-
-
-# ── lock (single-flight) ─────────────────────────────────────────────────────
-
-def _pid_alive(pid: int) -> bool:
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass  # nothing to clean up if the temp file was never created
+        raise
 
 
-def lock_is_stale() -> bool:
+def read_json_file(path: Path, stage: str):
+    """Parsed JSON object from a file this user owns, or None. Corruption is logged."""
     try:
-        age = time.time() - LOCK_DIR.stat().st_mtime
+        if os.stat(path).st_uid != os.getuid():
+            log_error(stage, reason="not-owned", path=str(path))
+            return None
+        d = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        log_error(stage, e)
+        return None
+    if not isinstance(d, dict):
+        log_error(stage, reason="not-an-object", path=str(path))
+        return None
+    return d
+
+
+# ── single-flight (flock) ────────────────────────────────────────────────────
+
+def try_lock():
+    """Take the exclusive refresh lock without blocking; return its fd, or None if held.
+    flock belongs to the open file description, so it survives being handed to a child and
+    is released by the kernel when the last holder exits or dies."""
+    import fcntl
+    fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        return False  # gone already
-    if age > LOCK_STALE_SEC:
-        return True
+        os.close(fd)
+        return None
+    return fd
+
+
+def inherited_lock_fd():
+    raw = os.environ.get("HEADSUP_USAGE_LOCK_FD")
+    if not raw:
+        return None
     try:
-        pid = int((LOCK_DIR / "pid").read_text().strip())
-    except (OSError, ValueError):
-        return age > 10   # the creator is mid-write; give it a moment
-    # A dead holder is only stale after a short grace: a parent hands the lock to its child.
-    return (not _pid_alive(pid)) and age > 10
+        fd = int(raw)
+        os.fstat(fd)
+        return fd
+    except (ValueError, OSError):
+        return None
 
 
-def acquire_lock() -> bool:
-    for _ in (0, 1):
-        try:
-            os.mkdir(LOCK_DIR)
-        except FileExistsError:
-            if lock_is_stale():
-                aside = LOCK_DIR.with_name(f"{LOCK_DIR.name}.stale.{os.getpid()}")
-                try:
-                    os.rename(LOCK_DIR, aside)   # only one reclaimer's rename can win
-                    shutil.rmtree(aside, ignore_errors=True)
-                except OSError:
-                    pass
-                continue
-            return False
-        except OSError as e:
-            log_error("lock-acquire", e)
-            return False
-        try:
-            (LOCK_DIR / "pid").write_text(str(os.getpid()))
-        except OSError as e:
-            log_error("lock-pid", e)
-        return True
-    return False
+# ── failure backoff ──────────────────────────────────────────────────────────
+
+def backoff_remaining() -> float:
+    d = read_json_file(BACKOFF_FILE, "backoff-read")
+    until = d.get("until") if d else None
+    if isinstance(until, bool) or not isinstance(until, (int, float)):
+        return 0.0
+    return max(0.0, until - time.time())
 
 
-def adopt_lock() -> bool:
-    """The detached worker takes over a lock its parent created, or acquires a fresh one."""
-    if LOCK_DIR.is_dir():
-        try:
-            (LOCK_DIR / "pid").write_text(str(os.getpid()))
-            os.utime(LOCK_DIR)
-            return True
-        except OSError as e:
-            log_error("lock-adopt", e)
-            return False
-    return acquire_lock()
-
-
-def beat_lock() -> None:
+def note_failure() -> None:
     try:
-        os.utime(LOCK_DIR)
-    except OSError:
-        pass  # a failed heartbeat only risks an early reclaim; the next beat retries
+        prev = read_json_file(BACKOFF_FILE, "backoff-read") or {}
+        n = prev.get("n", 0) if isinstance(prev.get("n", 0), int) else 0
+        n += 1
+        wait = min(MAX_BACKOFF_SEC, 60 * 2 ** min(n - 1, 6))
+        atomic_write(BACKOFF_FILE, json.dumps({"n": n, "until": time.time() + wait}))
+    except Exception as e:  # noqa: BLE001
+        log_error("backoff-write", e)
 
 
-def release_lock() -> None:
+def clear_backoff() -> None:
     try:
-        if (LOCK_DIR / "pid").read_text().strip() != str(os.getpid()):
-            return
-        for p in LOCK_DIR.iterdir():
-            p.unlink()
-        LOCK_DIR.rmdir()
+        os.unlink(BACKOFF_FILE)
+    except FileNotFoundError:
+        pass
     except OSError as e:
-        log_error("lock-release", e)
+        log_error("backoff-clear", e)
 
 
 # ── incremental index ────────────────────────────────────────────────────────
 
 def fresh_index() -> dict:
-    return {"v": INDEX_VERSION, "files": {}, "slots": {}}
+    return {"v": INDEX_VERSION, "built_at": time.time(), "files": {}, "slots": {}, "errors": {}}
 
 
 def load_index() -> dict:
-    try:
-        d = json.loads(INDEX_FILE.read_text())
-        if d.get("v") == INDEX_VERSION and isinstance(d.get("files"), dict) \
-                and isinstance(d.get("slots"), dict):
-            d["slots"] = {int(k): v for k, v in d["slots"].items()}
-            return d
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError, TypeError) as e:
-        log_error("index-load", e)
+    d = read_json_file(INDEX_FILE, "index-load")
+    if d is not None:
+        try:
+            if d.get("v") == INDEX_VERSION and isinstance(d.get("files"), dict) \
+                    and isinstance(d.get("slots"), dict) and isinstance(d.get("errors", {}), dict) \
+                    and isinstance(d.get("built_at"), (int, float)):
+                slots = {int(k): [v[0], v[1]] for k, v in d["slots"].items()}
+                for rec in d["files"].values():
+                    if len(rec) != 5:
+                        raise ValueError("bad file record")
+                return {"v": d["v"], "built_at": d["built_at"], "files": d["files"],
+                        "slots": slots, "errors": d.get("errors", {})}
+        except (ValueError, TypeError, IndexError, KeyError) as e:
+            log_error("index-load", e)
     return fresh_index()
 
 
 def save_index(idx: dict) -> None:
-    out = {"v": idx["v"], "files": idx["files"],
-           "slots": {str(k): v for k, v in idx["slots"].items()}}
+    out = {"v": idx["v"], "built_at": idx["built_at"], "files": idx["files"],
+           "slots": {str(k): v for k, v in idx["slots"].items()}, "errors": idx["errors"]}
     atomic_write(INDEX_FILE, json.dumps(out, separators=(",", ":")))
+
+
+def iter_transcripts(root):
+    """Yield (path, stat) for every *.jsonl file under root, like rglob("*.jsonl") but without
+    descending into SKIP_DIRS and without following directory symlinks."""
+    stack = [str(root)]
+    while stack:
+        d = stack.pop()
+        try:
+            it = os.scandir(d)
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                try:
+                    if e.is_dir(follow_symlinks=False):
+                        if e.name not in SKIP_DIRS:
+                            stack.append(e.path)
+                    elif e.name.endswith(".jsonl") and e.is_file():
+                        yield e.path, e.stat()
+                except OSError:
+                    continue
+
+
+class BadRecord(Exception):
+    """A usage record whose numbers cannot be summed; it is dropped and counted."""
+
+
+def _num(v):
+    if v is None:
+        return 0
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise BadRecord()
+    if isinstance(v, float) and not math.isfinite(v):
+        raise BadRecord()
+    return v
 
 
 def parse_usage_line(line: bytes):
     """One transcript line -> (bucket, output_tokens, cost), or None when it does not count.
-    Same acceptance rules as the original scan: an assistant entry with a timestamp and usage."""
+    Same acceptance rules as the original scan: an assistant entry with a timestamp and usage.
+    Raises BadRecord when the usage numbers themselves are unusable."""
     try:
         d = json.loads(line)
     except ValueError:
@@ -319,93 +383,141 @@ def parse_usage_line(line: bytes):
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=timezone.utc)
     try:
-        out = usage.get("output_tokens") or 0
-        inp = usage.get("input_tokens") or 0
-        cr  = usage.get("cache_read_input_tokens") or 0
-        cw  = usage.get("cache_creation_input_tokens") or 0
+        out = _num(usage.get("output_tokens"))
+        inp = _num(usage.get("input_tokens"))
+        cr  = _num(usage.get("cache_read_input_tokens"))
+        cw  = _num(usage.get("cache_creation_input_tokens"))
         p   = prices_for(msg.get("model", "") or "")
         cost = (inp * p["inp"] + out * p["out"] + cr * p["cr"] + cw * p["cw"]) / 1_000_000
-    except (TypeError, ValueError):
-        return None
+        if not math.isfinite(cost):
+            raise BadRecord()
+    except (TypeError, ValueError, ArithmeticError):
+        raise BadRecord()
     return int(ts.timestamp()) // BUCKET_SEC, out, cost
 
 
-def scan_file(path: str, off: int, slots: dict, tick) -> int:
-    """Add the usage in path[off:] to slots; return the byte offset consumed.
-    A trailing line without a newline is counted only if it already parses as a complete
-    record; otherwise it is left for the next refresh (the writer is mid-line)."""
-    consumed = off
-    with open(path, "rb") as fh:
-        fh.seek(off)
-        for line in fh:
-            tick()
-            has_nl = line.endswith(b"\n")
-            if b'"usage"' not in line:
-                if not has_nl:
-                    break
-                consumed += len(line)
-                continue
-            rec = parse_usage_line(line)
-            if rec is None and not has_nl:
-                break
-            consumed += len(line)
-            if rec is None:
-                continue
-            bucket, out, cost = rec
-            cur = slots.get(bucket)
-            if cur is None:
-                slots[bucket] = [out, cost]
-            else:
-                cur[0] += out
-                cur[1] += cost
-    return consumed
+def fingerprint(fd: int, off: int) -> str:
+    """Cheap identity of a file's content around a committed offset: its first 128 bytes and
+    the 64 bytes just before the offset. Detects an in-place rewrite without rereading it."""
+    if off <= 0:
+        return ""
+    head = os.pread(fd, min(128, off), 0)
+    tail = os.pread(fd, min(64, off), max(0, off - 64))
+    return hashlib.blake2b(head + tail, digest_size=8).hexdigest()
 
 
-def update_index(idx: dict, w_ts: float, tick) -> bool:
-    """Bring idx up to date with the transcripts. Returns True when the index cannot be
-    corrected in place (a file shrank or was replaced, or an in-week file vanished) and must
-    be rebuilt from scratch."""
+def scan_file(key: str, st, off: int, expect_fp: str, idx: dict, checkpoint, stats: dict):
+    """Add the usage in key[off:] to idx. Counts and the offset that produced them are
+    committed to the index TOGETHER (at checkpoints and at the end), so an error or a kill
+    part-way through leaves the index consistent. A trailing line without a newline is
+    counted only if it already parses as a complete record; otherwise it is left for the
+    next refresh (the writer is mid-line). Returns a rebuild reason, or None."""
     files, slots = idx["files"], idx["slots"]
+    delta = {}
+    consumed = off
+    fd = None
+
+    def commit(final: bool) -> None:
+        for b, (o, c) in delta.items():
+            cur = slots.get(b)
+            if cur is None:
+                slots[b] = [o, c]
+            else:
+                cur[0] += o
+                cur[1] += c
+        delta.clear()
+        # A mid-file checkpoint records size and mtime that can never match the file, so a
+        # restart rescans from the committed offset; only a finished scan can be skipped later.
+        files[key] = [st.st_ino, consumed,
+                      st.st_size if final else consumed,
+                      st.st_mtime_ns if final else 0,
+                      fingerprint(fd, consumed)]
+
+    try:
+        with open(key, "rb") as fh:
+            fd = fh.fileno()
+            if off and fingerprint(fd, off) != expect_fp:
+                return "fingerprint"
+            fh.seek(off)
+            next_ck = time.monotonic() + CHECKPOINT_SEC
+            for line in fh:
+                has_nl = line.endswith(b"\n")
+                if b'"usage"' not in line:
+                    if not has_nl:
+                        break
+                    consumed += len(line)
+                else:
+                    try:
+                        rec = parse_usage_line(line)
+                    except BadRecord:
+                        stats["bad"] += 1
+                        rec = None
+                    if rec is None and not has_nl:
+                        break
+                    consumed += len(line)
+                    if rec is not None:
+                        bucket, out, cost = rec
+                        cur = delta.get(bucket)
+                        if cur is None:
+                            delta[bucket] = [out, cost]
+                        else:
+                            cur[0] += out
+                            cur[1] += cost
+                if time.monotonic() >= next_ck:
+                    commit(False)
+                    checkpoint()
+                    next_ck = time.monotonic() + CHECKPOINT_SEC
+            commit(True)
+    except OSError as e:
+        log_error("scan", e, path=key)
+        idx["errors"][key] = st.st_mtime_ns   # do not retry (or re-log) until the file changes
+    return None
+
+
+def update_index(idx: dict, w_ts: float, keep_ts: float, checkpoint, stats: dict):
+    """Bring idx up to date with the transcripts. Returns None, or a reason string when the
+    index cannot be corrected in place and must be rebuilt from scratch."""
+    files, slots, errors = idx["files"], idx["slots"], idx["errors"]
     seen = set()
-    for jsonl in PROJECTS_DIR.rglob("*.jsonl"):
-        try:
-            st = jsonl.stat()
-        except OSError:
-            continue
+    for key, st in iter_transcripts(PROJECTS_DIR):
         if st.st_mtime < w_ts:
             continue
-        key = str(jsonl)
         seen.add(key)
+        if errors.get(key) == st.st_mtime_ns:
+            continue
         rec = files.get(key)
-        start = 0
+        start, expect = 0, ""
         if rec is not None:
             if st.st_ino != rec[0] or st.st_size < rec[1]:
-                return True
-            if st.st_size == rec[1]:
+                return "replaced-or-truncated"
+            if st.st_mtime_ns < rec[3]:
+                return "mtime-regressed"
+            if st.st_size == rec[2] and st.st_mtime_ns == rec[3]:
                 continue
-            start = rec[1]
-        try:
-            consumed = scan_file(key, start, slots, tick)
-        except OSError as e:
-            log_error("scan", e, path=key)
-            continue
-        files[key] = [st.st_ino, consumed, st.st_size, st.st_mtime]
+            start, expect = rec[1], rec[4]
+        reason = scan_file(key, st, start, expect, idx, checkpoint, stats)
+        if reason:
+            return reason
     for key in list(files):
         if key in seen:
             continue
         try:
             st = os.stat(key)
         except OSError:
-            if files[key][3] >= w_ts:
-                return True          # an in-week file disappeared: its past usage cannot be subtracted
+            if files[key][3] / 1e9 >= w_ts:
+                return "in-week-file-vanished"    # its past usage cannot be subtracted
             del files[key]
             continue
+        if st.st_mtime_ns < files[key][3]:
+            return "mtime-regressed"
         if st.st_mtime < w_ts:
             del files[key]           # aged out of the week window; its events are older than the window
-    cutoff = int(w_ts) // BUCKET_SEC
+    for key in [k for k in errors if k not in seen]:
+        del errors[key]
+    cutoff = int(keep_ts) // BUCKET_SEC
     for k in [k for k in slots if k < cutoff]:
         del slots[k]
-    return False
+    return None
 
 
 def window_totals(slots: dict, s_start: datetime, w_start: datetime):
@@ -452,79 +564,111 @@ def refresh(now: datetime = None) -> str:
     now = now or datetime.now(timezone.utc)
     s_start, w_start = block_start(now), week_start(now)
     w_ts = w_start.timestamp()
+    keep_ts = min(w_ts, s_start.timestamp())   # the session block can start before the week does
+    stats = {"bad": 0}
 
-    state = {"last": time.monotonic()}
-
-    def tick():
-        if time.monotonic() - state["last"] >= CHECKPOINT_SEC:
-            state["last"] = time.monotonic()
-            beat_lock()
-            save_index(idx)   # consistent at any line boundary: a restart resumes from here
+    def checkpoint():
+        save_index(idx)
 
     idx = load_index()
-    if update_index(idx, w_ts, tick):
+    reason = "periodic" if time.time() - idx["built_at"] > REBUILD_SEC else None
+    if reason is None:
+        reason = update_index(idx, w_ts, keep_ts, checkpoint, stats)
+    if reason:
+        log_error("rebuild", reason=reason)
         idx = fresh_index()
-        if update_index(idx, w_ts, tick):
-            raise RuntimeError("index still inconsistent after a clean rebuild")
+        stats["bad"] = 0
+        reason = update_index(idx, w_ts, keep_ts, checkpoint, stats)
+        if reason:
+            raise RuntimeError(f"index still inconsistent after a clean rebuild: {reason}")
 
     s, w = window_totals(idx["slots"], s_start, w_start)
     output = build_output(now, s, w)
+    if not OUTPUT_RE.fullmatch(output):
+        raise RuntimeError("refusing to cache an output line that is not plain KEY=value pairs")
     save_index(idx)
     atomic_write(CACHE_FILE, json.dumps({"ts": now.timestamp(), "output": output}))
+    if stats["bad"]:
+        log_error("bad-records", count=stats["bad"])
     return output
 
 
 # ── entry points ─────────────────────────────────────────────────────────────
 
 def read_cache():
-    try:
-        d = json.loads(CACHE_FILE.read_text())
-        if isinstance(d.get("ts"), (int, float)) and isinstance(d.get("output"), str):
-            return d
-    except FileNotFoundError:
+    d = read_json_file(CACHE_FILE, "cache-read")
+    if d is None:
         return None
-    except (OSError, ValueError) as e:
-        log_error("cache-read", e)
-    return None
+    ts, out = d.get("ts"), d.get("output")
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not math.isfinite(ts) \
+            or not isinstance(out, str) or not OUTPUT_RE.fullmatch(out):
+        log_error("cache-read", reason="invalid-fields")
+        return None
+    return d
 
 
 def start_refresher() -> None:
-    """Spawn the detached worker unless a live one already holds the lock."""
-    if LOCK_DIR.exists() and not lock_is_stale():
-        return
-    if not acquire_lock():
+    """Spawn the detached worker unless one already holds the lock or we are backing off."""
+    if backoff_remaining() > 0:
         return
     try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        fd = try_lock()
+    except OSError as e:
+        log_error("lock", e)
+        return
+    if fd is None:
+        return
+    try:
+        import subprocess
         subprocess.Popen(
             [sys.executable, os.path.abspath(__file__), "--refresh"],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True, close_fds=True,
-            env={**os.environ, "HEADSUP_USAGE_LOCK_HANDOFF": "1"},
+            start_new_session=True, close_fds=True, pass_fds=(fd,),
+            env={**os.environ, "HEADSUP_USAGE_LOCK_FD": str(fd)},
         )
     except OSError as e:
         log_error("spawn", e)
-        release_lock()
+    finally:
+        os.close(fd)     # the child keeps the lock through its inherited copy
 
 
 def run_refresh(sync: bool) -> int:
-    held = adopt_lock() if os.environ.get("HEADSUP_USAGE_LOCK_HANDOFF") == "1" else acquire_lock()
-    if not held:
+    import signal
+    fd = inherited_lock_fd()
+    if fd is None:
+        try:
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            fd = try_lock()
+        except OSError as e:
+            log_error("lock", e)
+            return 1
+    if fd is None:
         if sync:
             print("headsup-usage-windows: another refresh holds the lock", file=sys.stderr)
         return 0
+
+    def on_alarm(signum, frame):
+        raise TimeoutError(f"refresh still running after {MAX_RUN_SEC}s")
+
     try:
+        signal.signal(signal.SIGALRM, on_alarm)
+        signal.alarm(MAX_RUN_SEC)
         try:
             os.nice(10)
         except OSError:
             pass  # lowering priority is a courtesy; the refresh is still correct without it
         output = refresh()
+        clear_backoff()
     except Exception as e:  # noqa: BLE001 (logged; the last good cache keeps being served)
         log_error("refresh", e)
+        note_failure()
         if sync:
             print(f"headsup-usage-windows: refresh failed: {e}", file=sys.stderr)
         return 1
     finally:
-        release_lock()
+        signal.alarm(0)
+        os.close(fd)
     if sync:
         print(output)
     return 0
@@ -538,10 +682,10 @@ def main() -> int:
     cached = read_cache()
     if cached is not None:
         age = time.time() - cached["ts"]
-        if age < MAX_STALE_SEC:
+        if -60 <= age < MAX_STALE_SEC:     # a future-dated cache beyond clock skew is not trusted
             print(cached["output"])
-        if age < CACHE_TTL_SEC:
-            return 0
+            if 0 <= age < CACHE_TTL_SEC:
+                return 0
     start_refresher()
     return 0
 
