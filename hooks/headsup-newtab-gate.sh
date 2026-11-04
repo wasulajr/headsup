@@ -21,11 +21,40 @@ set -uo pipefail
 
 LIMIT=95
 GATE_CACHE_TTL_SEC=300
+APT_ACCOUNTS_URL="${HEADSUP_APT_ACCOUNTS_URL:-http://127.0.0.1:8765/api/claude-accounts}"
 CONF="$HOME/.claude/hooks/headsup-status.conf"
 # shellcheck source=/dev/null
 [ -f "$CONF" ] && . "$CONF" 2>/dev/null
 LIMIT="${NEWTAB_WEEK_LIMIT:-$LIMIT}"
 [ "${NEWTAB_GATE_DISABLED:-0}" = "1" ] && exit 0
+
+# ── Silent seat selection (headsup#35) ───────────────────────────────────────
+# When APT is running, ask its allocator for the best eligible seat and emit
+#   SEAT|<configDir>|<email>
+# The workflow prepends CLAUDE_CONFIG_DIR so the tab opens on that seat under
+# the same 95% policy APT tabs get. If APT is down or yields nothing, fall
+# through to the ambient utilization check below (the #33 behavior).
+# NEWTAB_SEAT_SELECT=0 disables selection while keeping the gate.
+if [ "${NEWTAB_SEAT_SELECT:-1}" = "1" ]; then
+    seat="$(/usr/bin/curl -s --max-time 3 "$APT_ACCOUNTS_URL" 2>/dev/null | /usr/bin/python3 -c '
+import json, sys
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+accounts = payload if isinstance(payload, list) else payload.get("accounts") or []
+eligible = [a for a in accounts if isinstance(a, dict) and a.get("kind") == "claude"
+            and a.get("allocatorEligible") and a.get("configDir")]
+if not eligible:
+    sys.exit(0)
+best = min(eligible, key=lambda a: float(a.get("allocatorScore") or 0))
+print("SEAT|" + str(best["configDir"]) + "|" + str(best.get("email") or best.get("name") or ""))
+' 2>/dev/null)"
+    if [ -n "$seat" ]; then
+        printf '%s\n' "$seat"
+        exit 0
+    fi
+fi
 
 # The Quick Action launches `claude` with no CLAUDE_CONFIG_DIR, so the account
 # under test is whatever this environment resolves (ambient by default).
