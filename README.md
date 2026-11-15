@@ -616,3 +616,7 @@ One command bumps `VERSION`, prepends the changelog section, commits, tags, and 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+---
+
+Built by Steve Wasula, CTO of [Stony Point, Inc.](https://www.stonyp.com/), the team behind [Digadop](https://digadop.ai/), AI-centric software for Salesforce teams.
