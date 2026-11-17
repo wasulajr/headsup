@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { acquireLock, resolveTranscript, readTranscript } from './headsup-codex-transcript.mjs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -25,6 +26,9 @@ const historyFile = path.join(utilDir, 'history.jsonl');
 
 fs.mkdirSync(utilDir, { recursive: true });
 
+const payload = process.stdin.isTTY ? {} : JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+const release = acquireLock(stateFile + '.lock');
+try {
 const state = readJson(stateFile, null) || {
   version: 1,
   uuid,
@@ -44,7 +48,17 @@ state.lastAt = now;
 state.cwd = process.cwd();
 state.events[event] = Number(state.events[event] || 0) + 1;
 
-const session = findBestSession(path.join(codexHome, 'sessions'), process.cwd());
+const source = resolveTranscript(path.join(codexHome, 'sessions'), payload, process.env);
+const cacheDir = path.join(utilDir, 'transcript-cache');
+fs.mkdirSync(cacheDir, { recursive: true });
+const unlockTranscript = acquireLock(path.join(cacheDir, source.id + '.lock'));
+let session;
+try { session = readTranscript(source.file, source.id, path.join(cacheDir, source.id + '.json')); }
+finally { unlockTranscript(); }
+if (state.sessionId !== source.id) {
+  for (const key of ['usage', 'rateLimits', 'transcriptCounts', 'model', 'cliVersion']) delete state[key];
+}
+state.transcriptRead = { bytes: session.bytesRead, snapshotBytes: session.snapshotBytes };
 if (session) {
   state.sessionPath = session.path;
   state.sessionId = session.meta?.id || state.sessionId;
@@ -74,6 +88,8 @@ try {
 } catch {
   // Best effort only.
 }
+
+} finally { release(); }
 
 function stateForEvent(name) {
   if (name === 'PermissionRequest' || name === 'Stop') return 'waiting';
@@ -112,108 +128,6 @@ function writeTextAtomic(file, value) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, value);
   fs.renameSync(tmp, file);
-}
-
-function findBestSession(root, cwd) {
-  let files = [];
-  try {
-    files = listJsonl(root)
-      .map((file) => ({ file, mtime: fs.statSync(file).mtimeMs }))
-      .sort((a, b) => b.mtime - a.mtime)
-      .slice(0, 30);
-  } catch {
-    return null;
-  }
-
-  let fallback = null;
-  for (const entry of files) {
-    const parsed = parseSession(entry.file);
-    if (!parsed) continue;
-    fallback ||= parsed;
-    if (parsed.meta?.cwd === cwd) return parsed;
-  }
-  return fallback;
-}
-
-function listJsonl(root) {
-  const out = [];
-  const stack = [root];
-  while (stack.length) {
-    const dir = stack.pop();
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) stack.push(full);
-      else if (entry.isFile() && entry.name.endsWith('.jsonl')) out.push(full);
-    }
-  }
-  return out;
-}
-
-function parseSession(file) {
-  let meta = null;
-  let usage = null;
-  let rateLimits = null;
-  const counts = {
-    userMessages: 0,
-    agentMessages: 0,
-    toolCalls: 0,
-    toolOutputs: 0,
-    turnsStarted: 0,
-    turnsCompleted: 0,
-  };
-
-  let text;
-  try {
-    text = fs.readFileSync(file, 'utf8');
-  } catch {
-    return null;
-  }
-
-  for (const line of text.split('\n')) {
-    if (!line) continue;
-    let row;
-    try {
-      row = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (row.type === 'session_meta') {
-      meta = row.payload || meta;
-      continue;
-    }
-    if (row.type === 'event_msg') {
-      const payload = row.payload || {};
-      if (payload.type === 'token_count') {
-        usage = payload.info || usage;
-        rateLimits = payload.rate_limits || rateLimits;
-      } else if (payload.type === 'user_message') {
-        counts.userMessages += 1;
-      } else if (payload.type === 'agent_message') {
-        counts.agentMessages += 1;
-      } else if (payload.type === 'task_started') {
-        counts.turnsStarted += 1;
-      } else if (payload.type === 'task_complete') {
-        counts.turnsCompleted += 1;
-      }
-      continue;
-    }
-    if (row.type === 'response_item') {
-      const payload = row.payload || {};
-      if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
-        counts.toolCalls += 1;
-      } else if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
-        counts.toolOutputs += 1;
-      }
-    }
-  }
-
-  return { path: file, meta, usage, rateLimits, counts };
 }
 
 function buildSummary(s) {
