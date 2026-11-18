@@ -111,6 +111,7 @@ for name in \
     headsup-codex-set-label.sh \
     headsup-codex-resync.sh \
     headsup-codex-status-report.sh \
+    headsup-codex-transcript.mjs \
     headsup-codex-utilization.mjs \
     headsup-codex-utilization-report.mjs \
     headsup-codex-diagnose.sh \

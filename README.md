@@ -620,3 +620,17 @@ MIT. See [LICENSE](LICENSE).
 ---
 
 Built by Steve Wasula, CTO of [Stony Point, Inc.](https://www.stonyp.com/), the team behind [Digadop](https://digadop.ai/), AI-centric software for Salesforce teams.
+
+### Codex utilization hook distribution
+
+`setup-codex.sh` installs both `headsup-codex-utilization.mjs` and its
+`headsup-codex-transcript.mjs` dependency. The helper is copied first. Keep changes
+to this generic hook in this repository so the standard Codex update command
+ships them; the personal `codex-config` backup alone is not the updater source.
+
+Validate the parser and the installer's actual copy block with:
+
+```sh
+node --test hooks/headsup-codex-utilization.test.mjs
+python3 -m unittest discover -s tests -p 'test_codex_utilization_install.py'
+```
