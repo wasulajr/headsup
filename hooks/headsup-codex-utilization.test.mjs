@@ -26,7 +26,15 @@ test('filename identity ignores newer sibling in same directory',t=>{const {dir,
 test('payload session overrides daemon environment session',t=>{const {dir,file}=fixture(t);fs.writeFileSync(file,meta());assert.equal(resolveTranscript(dir,{session_id:id},{CODEX_THREAD_ID:other}).file,file);});
 test('malformed complete JSON fails loudly without cursor advance',t=>{const {file,cache}=fixture(t);fs.writeFileSync(file,meta());const x=readTranscript(file,id,cache);fs.appendFileSync(file,'not-json\n');assert.throws(()=>readTranscript(file,id,cache),SyntaxError);assert.equal(JSON.parse(fs.readFileSync(cache)).offset,x.offset);});
 test('lock rejects live owner and releases cleanly',t=>{const {dir}=fixture(t);const file=path.join(dir,'test.lock');const release=acquireLock(file);assert.throws(()=>acquireLock(file),/LOCK_BUSY/);release();acquireLock(file)();});
-test('dead lock owner is recoverable',t=>{const {dir}=fixture(t);const file=path.join(dir,'test.lock');const dead=spawnSync(process.execPath,['-e','console.log(process.pid)'],{encoding:'utf8'});fs.writeFileSync(file,dead.stdout.trim());acquireLock(file)();assert.equal(fs.existsSync(file),false);});
+test('empty legacy lock and termination of a kernel lock owner permit recovery', t => {
+ const {dir}=fixture(t), file=path.join(dir,'test.lock');
+ fs.writeFileSync(file,'');
+ const moduleUrl=new URL('./headsup-codex-transcript.mjs',import.meta.url).href;
+ const killed=spawnSync(process.execPath,['--input-type=module','-e',
+   `import {acquireLock} from ${JSON.stringify(moduleUrl)}; acquireLock(${JSON.stringify(file)}); process.kill(process.pid,"SIGKILL");`]);
+ assert.equal(killed.signal,'SIGKILL');
+ acquireLock(file)();
+});
 test('full hook uses stdin identity, retains events, clears usage on session switch',t=>{
  const {dir,file}=fixture(t);fs.writeFileSync(file,meta()+usage(7));const otherFile=path.join(dir,`rollout-${other}.jsonl`);fs.writeFileSync(otherFile,meta(other));
  const env={...process.env,CODEX_HOME:dir,HEADSUP_CODEX_STATE_ROOT:path.join(dir,'state'),AI_POWER_TERM_SESSION_ID:'fixture',AI_POWER_TERM_HOOK_URL:'',STEVE_TABS_HOOK_URL:''};
