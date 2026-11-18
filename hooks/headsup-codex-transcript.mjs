@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 
 export function readJson(file, fallback = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
@@ -12,28 +13,24 @@ export function writeJson(file, data) {
   fs.renameSync(tmp, file);
 }
 export function acquireLock(file) {
-  for (let attempt = 0; attempt < 21; attempt++) {
-    try {
-      const fd = fs.openSync(file, 'wx', 0o600);
-      fs.writeFileSync(fd, String(process.pid)); fs.closeSync(fd);
-      return () => fs.unlinkSync(file);
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      let pid;
-      try { pid = Number(fs.readFileSync(file, 'utf8')); }
-      catch (readError) { if (readError.code === 'ENOENT') continue; throw readError; }
-      if (Number.isInteger(pid) && pid > 0) {
-        try { process.kill(pid, 0); }
-        catch (probeError) {
-          if (probeError.code !== 'ESRCH') throw probeError;
-          try { fs.unlinkSync(file); }
-          catch (unlinkError) { if (unlinkError.code !== 'ENOENT') throw unlinkError; }
-          continue;
-        }
-      }
-      if (attempt === 20) throw new Error('UTILIZATION_LOCK_BUSY');
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-    }
+  // flock belongs to the open file description shared with fd 3. The kernel
+  // releases it when Node exits, even if the hook deadline kills the process.
+  // Keep this inode in place: unlinking it would let two writers lock different files.
+  const fd = fs.openSync(file + '.flock', 'a+', 0o600);
+  try {
+    const result = spawnSync('/usr/bin/perl', ['-MFcntl=:flock', '-e', String.raw`
+      open(my $fh, '+<&=', 3) or die "open flock descriptor: $!";
+      local $SIG{ALRM} = sub { exit 75 };
+      alarm 2;
+      flock($fh, LOCK_EX) or die "flock: $!";
+    `], { stdio: ['ignore', 'ignore', 'pipe', fd], encoding: 'utf8' });
+    if (result.error) throw result.error;
+    if (result.status === 75) throw new Error('UTILIZATION_LOCK_BUSY');
+    if (result.status !== 0) throw new Error('UTILIZATION_FLOCK_FAILED: ' + result.stderr);
+    return () => fs.closeSync(fd);
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
   }
 }
 
